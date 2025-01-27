@@ -1,0 +1,15 @@
+[package]
+name = "twenty-fourty-eight-solver"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+lto = true
+opt-level = 3
+
+[dependencies]
+anyhow = "1.0.95"
+itertools = "0.14.0"
+# anyhow = "1.0.95"
+# itertools = "0.14.0"
+# rand = "0.8.5"
