@@ -28,18 +28,30 @@ unsafe fn load_lookup_table() -> __m256 {
 unsafe fn interleave_board(board_mm128: __m128i) -> __m256i {
     unsafe {
         let board_mm256 = _mm256_set_m128i(board_mm128, board_mm128); // 01230123
-        let board_mm256d = _mm256_castsi256_pd(board_mm256);
+        //let board_mm256d = _mm256_castsi256_pd(board_mm256);
+        //
+        ////let board_mm256 = _mm256_castsi128_si256(board_mm128); // 0123xxxx
+        //
+        ////_mm256_unpacklo_epi32(board_mm256, board_mm256)
+        ////_mm256_shuffle_ps(board_mm256, board_mm256, 0b)
+        //let zeros = _mm256_setzero_pd();
+        //let intermediate = _mm256_shuffle_pd::<0b1100>(board_mm256d, zeros);
+        //let swapped = _mm256_castpd_ps(intermediate);
+        //
+        //let result = _mm256_shuffle_ps::<0b10_01_11_00>(swapped, swapped);
+        //_mm256_castps_si256(result)
 
-        //let board_mm256 = _mm256_castsi128_si256(board_mm128); // 0123xxxx
+        // 0x808080801f1e1d1c808080801b1a191880808080070605048080808003020100
+        let indices = [
+            0x80808080_03020100_u64,
+            0x80808080_07060504_u64,
+            0x80808080_1b1a1918_u64,
+            0x80808080_1f1e1d1c_u64,
+        ];
 
-        //_mm256_unpacklo_epi32(board_mm256, board_mm256)
-        //_mm256_shuffle_ps(board_mm256, board_mm256, 0b)
-        let zeros = _mm256_setzero_pd();
-        let intermediate = _mm256_shuffle_pd::<0b1100>(board_mm256d, zeros);
-        let swapped = _mm256_castpd_ps(intermediate);
-
-        let result = _mm256_shuffle_ps::<0b10_01_11_00>(swapped, swapped);
-        _mm256_castps_si256(result)
+        // Load into a YMM register
+        let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
+        _mm256_shuffle_epi8(board_mm256, indices)
     }
 }
 
@@ -91,9 +103,11 @@ impl Board {
     pub fn to_array(self) -> [[u8; 4]; 4] {
         // SAFETY: Board has the same bit representation as a byte slice
         unsafe {
-            let zero_mask = !self.nonzero();
-            // TODO: Zero out the cells based on the bit set
-            std::mem::transmute(self)
+            let zeros = _mm_setzero_si128();
+            let m = _mm_set1_epi8(0x7f);
+            let b = _mm_and_si128(self.0, m);
+            let result = _mm_blendv_epi8(zeros, b, self.0);
+            std::mem::transmute(result)
         }
     }
 
@@ -134,12 +148,12 @@ impl fmt::Debug for Board {
         let mut rows = self.to_array().into_iter();
 
         if let Some(row) = rows.next() {
-            row.iter().try_for_each(|c| write!(f, "{c:2x} "))?
+            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
         }
 
         for row in rows {
             f.write_char('\n')?;
-            row.iter().try_for_each(|c| write!(f, "{c:2x} "))?
+            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
         }
 
         Ok(())
@@ -148,60 +162,72 @@ impl fmt::Debug for Board {
 
 #[cfg(test)]
 mod test {
+    use itertools::Itertools;
+    use rand::seq::{IndexedRandom, SliceRandom};
+
+    use crate::swipe_left_u8_inf_arr;
+
     use super::*;
 
-    #[test]
-    fn test_compact_rows() {
-        let example = [[0, 1, 2, 3], [4, 0, 0, 0], [6, 0, 7, 0], [0, 8, 9, 0]];
-        let board = Board::from_array(example);
-        let output = unsafe { board.compact_rows_unsafe() };
-        panic!("Input:\n{board:?}\n\nOutput:\n{output:?}\n");
+    fn generate_random_board<const N: usize, const M: usize>(
+        filled: u8,
+        duplicates: u8,
+    ) -> [[u8; N]; M] {
+        let mut nums = Vec::with_capacity(16);
+        nums.extend(1..filled + 1);
+
+        // Add duplicates
+        let duplicates = (0..duplicates)
+            .map(|_| *nums.choose(&mut rand::rng()).unwrap())
+            .collect_vec();
+
+        nums.extend(duplicates);
+        nums.resize(N * M, 0);
+
+        // Shuffle the values randomly
+        nums.shuffle(&mut rand::rng());
+        use std::array as arr;
+        let mut nums = nums.into_iter();
+
+        arr::from_fn(|_| arr::from_fn(|_| nums.next().unwrap_or(0)))
     }
 
-    //#[test]
-    //fn test_compact_rows_inner() {
-    //    let example = [[0, 1, 0, 2], [3, 0, 4, 0], [0, 5, 6, 0], [7, 8, 9, 10]];
-    //    //Perms:
-    //    //2  3 80 80
-    //    //1  2  3 80
-    //    //0  1  3 80
-    //    //0  2  3 80
-    //    let board = Board::from_array(example);
-    //    let Board(board_mm128) = board;
-    //
-    //    use std::mem::transmute as tb;
-    //
-    //    #[allow(clippy::transmute_num_to_bytes)]
-    //    #[allow(clippy::missing_transmute_annotations)]
-    //    let output = unsafe {
-    //        let interleaved = interleave_board(board_mm128);
-    //
-    //        let mask = _mm256_movemask_epi8(interleaved);
-    //        // 00000101_00000110_00001110_00000001
-    //        eprintln!("Mask: {mask:032b}");
-    //        eprintln!("Mask: {:?}", tb::<_, [u8; 4]>(mask).map(|i| i & 7));
-    //
-    //        let pattern_idx = mask_to_idx(mask);
-    //
-    //        eprintln!(
-    //            "Indices: {:?}",
-    //            tb::<_, [u32; 8]>(pattern_idx).map(|i| i & 7)
-    //        );
-    //
-    //        let lookup_mm256 = load_lookup_table();
-    //        eprintln!("Lookup: {:?}", tb::<_, [[i8; 4]; 8]>(lookup_mm256));
-    //
-    //        let row_permutations = get_row_permutations(lookup_mm256, pattern_idx);
-    //        eprintln!("Perms: {:?}", tb::<_, [u8; 16]>(row_permutations));
-    //        eprintln!("Perms: \n{:?}", Board(row_permutations));
-    //
-    //        let permuted_rows = add_offsets(row_permutations);
-    //        eprintln!("Cell Indices: \n{:?}", Board(permuted_rows));
-    //
-    //        let result = _mm_shuffle_epi8(board_mm128, permuted_rows);
-    //        Board(result)
-    //    };
-    //
-    //    panic!("Input:\n{board:?}\n\nOutput:\n{output:?}\n");
-    //}
+    fn baseline_swipe<const N: usize, const M: usize>(board: [[u8; N]; M]) -> [[u8; N]; M] {
+        board.map(|mut row| {
+            swipe_left_u8_inf_arr(&mut row);
+            row
+        })
+    }
+
+    #[test]
+    fn test_compact() {
+        const N: i32 = 2000;
+
+        let test_cases = (0..16).flat_map(|filled| {
+            (0..N).map(move |_|
+            // Generate a random board with the specified number of filled cells
+            generate_random_board::<4, 4>(filled, 0))
+        });
+
+        for board in test_cases {
+            // Create a Board instance from the array for your compact method
+            let board_instance = Board::from_array(board);
+
+            // Run the baseline swipe
+            let baseline_output = baseline_swipe(board);
+
+            // Run your optimized compact method
+            let optimized_output = unsafe { board_instance.compact_rows_unsafe() };
+
+            // Assert that the outputs are equal
+            assert_eq!(
+                optimized_output.to_array(),
+                baseline_output,
+                "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
+                Board::from_array(board),
+                Board::from_array(baseline_output),
+                optimized_output
+            );
+        }
+    }
 }
