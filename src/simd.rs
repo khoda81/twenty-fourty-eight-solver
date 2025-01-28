@@ -10,14 +10,14 @@ pub struct Board(__m128i);
 unsafe fn load_lookup_table() -> __m256 {
     const E: i8 = -128;
     const PERM_LOOKUP: [[i8; 4]; 8] = [
-        [3, E, E, E], // 000
-        [0, 3, E, E], // 100
-        [1, 3, E, E], // 010
-        [0, 1, 3, E], // 110
-        [2, 3, E, E], // 001
-        [0, 2, 3, E], // 101
-        [1, 2, 3, E], // 011
-        [0, 1, 2, 3], // 111
+        [3, E, E, E], // 000x
+        [0, 3, E, E], // 100x
+        [1, 3, E, E], // 010x
+        [0, 1, 3, E], // 110x
+        [2, 3, E, E], // 001x
+        [0, 2, 3, E], // 101x
+        [1, 2, 3, E], // 011x
+        [0, 1, 2, 3], // 111x
     ];
 
     let lookup_ptr = PERM_LOOKUP.as_flattened().as_ptr();
@@ -28,20 +28,6 @@ unsafe fn load_lookup_table() -> __m256 {
 unsafe fn interleave_board(board_mm128: __m128i) -> __m256i {
     unsafe {
         let board_mm256 = _mm256_set_m128i(board_mm128, board_mm128); // 01230123
-        //let board_mm256d = _mm256_castsi256_pd(board_mm256);
-        //
-        ////let board_mm256 = _mm256_castsi128_si256(board_mm128); // 0123xxxx
-        //
-        ////_mm256_unpacklo_epi32(board_mm256, board_mm256)
-        ////_mm256_shuffle_ps(board_mm256, board_mm256, 0b)
-        //let zeros = _mm256_setzero_pd();
-        //let intermediate = _mm256_shuffle_pd::<0b1100>(board_mm256d, zeros);
-        //let swapped = _mm256_castpd_ps(intermediate);
-        //
-        //let result = _mm256_shuffle_ps::<0b10_01_11_00>(swapped, swapped);
-        //_mm256_castps_si256(result)
-
-        // 0x808080801f1e1d1c808080801b1a191880808080070605048080808003020100
         let indices = [
             0x80808080_03020100_u64,
             0x80808080_07060504_u64,
@@ -82,7 +68,12 @@ unsafe fn add_offsets(row_permutations: __m128i) -> __m128i {
 }
 
 impl Board {
-    pub fn from_array(cells: [[u8; 4]; 4]) -> Self {
+    /// # Safety
+    /// This function uses unsafe SIMD intrinsics. The caller must ensure that the
+    /// target CPU supports AVX2 and SSSE3 instructions.
+    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "ssse3")]
+    pub unsafe fn from_array_unchecked(cells: [[u8; 4]; 4]) -> Self {
         let flat_cells: [u8; 16] = unsafe { std::mem::transmute(cells) }; // Flatten 2D array to 1D
         unsafe {
             let board = _mm_loadu_si128(flat_cells.as_ptr() as *const __m128i);
@@ -101,31 +92,23 @@ impl Board {
     }
 
     pub fn to_array(self) -> [[u8; 4]; 4] {
-        // SAFETY: Board has the same bit representation as a byte slice
+        // SAFETY: Board is only instantiatable on avx2 ssse3
         unsafe {
             let zeros = _mm_setzero_si128();
             let m = _mm_set1_epi8(0x7f);
             let b = _mm_and_si128(self.0, m);
             let result = _mm_blendv_epi8(zeros, b, self.0);
+
+            // SAFETY: Board has the same bit representation as a byte slice
             std::mem::transmute(result)
         }
     }
 
-    // Compute non-zero mask using a single SIMD instruction approach
-    unsafe fn nonzero(self) -> u16 {
-        unsafe { _mm_movemask_epi8(self.0) as u16 }
-    }
-
     /// Compact rows of a 2048 board using SIMD intrinsics.
-    ///
-    /// # Safety
-    /// This function uses unsafe SIMD intrinsics. The caller must ensure that the
-    /// target CPU supports AVX2 and SSSE3 instructions.
-    #[target_feature(enable = "avx2")]
-    #[target_feature(enable = "ssse3")]
-    pub unsafe fn compact_rows_unsafe(self) -> Self {
+    pub fn compact_rows(self) -> Self {
         let Self(board_mm128) = self;
 
+        // SAFETY: Board is only instantiatable on avx2 ssse3
         unsafe {
             let interleaved = interleave_board(board_mm128);
 
@@ -133,9 +116,7 @@ impl Board {
             let pattern_idx = mask_to_idx(mask);
 
             let lookup_mm256 = load_lookup_table();
-
             let row_permutations = get_row_permutations(lookup_mm256, pattern_idx);
-
             let permuted_rows = add_offsets(row_permutations);
             let result = _mm_shuffle_epi8(board_mm128, permuted_rows);
             Self(result)
@@ -210,22 +191,16 @@ mod test {
         });
 
         for board in test_cases {
-            // Create a Board instance from the array for your compact method
-            let board_instance = Board::from_array(board);
-
-            // Run the baseline swipe
+            let board_instance = unsafe { Board::from_array_unchecked(board) };
             let baseline_output = baseline_swipe(board);
+            let optimized_output = board_instance.compact_rows();
 
-            // Run your optimized compact method
-            let optimized_output = unsafe { board_instance.compact_rows_unsafe() };
-
-            // Assert that the outputs are equal
             assert_eq!(
                 optimized_output.to_array(),
                 baseline_output,
                 "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
-                Board::from_array(board),
-                Board::from_array(baseline_output),
+                board_instance,
+                unsafe { Board::from_array_unchecked(baseline_output) },
                 optimized_output
             );
         }

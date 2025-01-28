@@ -8,11 +8,8 @@ lto = true
 opt-level = 3
 
 [dependencies]
-anyhow = "1.0.95"
-itertools = "0.14.0"
+anyhow = "1.0"
+itertools = "0.14"
 
 [dev-dependencies]
-rand = "0.9.0"
-# anyhow = "1.0.95"
-# itertools = "0.14.0"
-# rand = "0.8.5"
+rand = "0.9"
