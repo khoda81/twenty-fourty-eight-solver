@@ -3,6 +3,8 @@ use std::{
     fmt::{self, Write},
 };
 
+use thiserror::Error;
+
 #[derive(Clone, Copy)]
 pub struct Board(__m128i);
 
@@ -25,20 +27,24 @@ unsafe fn load_lookup_table() -> __m256 {
 }
 
 /// Interleave the board data for mask extraction.
-unsafe fn interleave_board(board_mm128: __m128i) -> __m256i {
-    unsafe {
-        let board_mm256 = _mm256_set_m128i(board_mm128, board_mm128); // 01230123
-        let indices = [
-            0x80808080_03020100_u64,
-            0x80808080_07060504_u64,
-            0x80808080_1b1a1918_u64,
-            0x80808080_1f1e1d1c_u64,
-        ];
+unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
+    let indices = [
+        0xFFFFFFFF_03020100_u64,
+        0xFFFFFFFF_07060504_u64,
+        0xFFFFFFFF_1B1A1918_u64,
+        0xFFFFFFFF_1F1E1D1C_u64,
+    ];
 
+    unsafe {
         // Load into a YMM register
         let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
         _mm256_shuffle_epi8(board_mm256, indices)
     }
+}
+
+// Repeat the board twice in a ymm
+unsafe fn broadcast_256(board_mm128: __m128i) -> __m256i {
+    unsafe { _mm256_set_m128i(board_mm128, board_mm128) }
 }
 
 /// Broadcast the mask into an AVX2 register.
@@ -62,29 +68,63 @@ unsafe fn get_row_permutations(lookup_mm256: __m256, mask_broadcast: __m256i) ->
 /// Add row offsets to the row permutations.
 unsafe fn add_offsets(row_permutations: __m128i) -> __m128i {
     unsafe {
-        let row_offsets = _mm_set_epi32(0x0c0c0c0c, 0x08080808, 0x04040404, 0x00000000);
+        let row_offsets = _mm_set_epi32(0x0C0C0C0C, 0x08080808, 0x04040404, 0x00000000);
         _mm_add_epi32(row_permutations, row_offsets)
     }
 }
 
+/// Shift cells to left for comparison mask
+unsafe fn comparison_target(board: __m128i) -> __m128i {
+    unsafe {
+        let board_mm256 = _mm256_set_m128i(board, board); // 01230123
+        let indices = [
+            0xFFFFFFFF_FF030201_u64,
+            0xFFFFFFFF_FF070605_u64,
+            0xFFFFFFFF_FF1B1A19_u64,
+            0xFFFFFFFF_FF1F1E1D_u64,
+        ];
+
+        todo!()
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("Required CPU features (AVX2 and SSSE3) are not available on this platform.")]
+pub struct MissingCpuFeatures;
+
 impl Board {
+    /// Safely creates a `Board` from a 2D array.
+    ///
+    /// # Errors
+    /// Returns a `BoardError::MissingCpuFeatures` error if the CPU does not support the required AVX2 and SSSE3 features.
+    pub fn from_array(cells: [[u8; 4]; 4]) -> Result<Self, MissingCpuFeatures> {
+        if cfg!(target_arch = "x86_64")
+            && is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("ssse3")
+        {
+            // Safety: We've verified the platform supports AVX2 and SSSE3.
+            Ok(unsafe { Self::from_array_unchecked(cells) })
+        } else {
+            Err(MissingCpuFeatures)
+        }
+    }
+
     /// # Safety
     /// This function uses unsafe SIMD intrinsics. The caller must ensure that the
     /// target CPU supports AVX2 and SSSE3 instructions.
     #[target_feature(enable = "avx2")]
     #[target_feature(enable = "ssse3")]
     pub unsafe fn from_array_unchecked(cells: [[u8; 4]; 4]) -> Self {
-        let flat_cells: [u8; 16] = unsafe { std::mem::transmute(cells) }; // Flatten 2D array to 1D
         unsafe {
+            let flat_cells: [u8; 16] = std::mem::transmute(cells); // Flatten 2D array to 1D
             let board = _mm_loadu_si128(flat_cells.as_ptr() as *const __m128i);
             let zero = _mm_setzero_si128();
 
             // Compare for non-zero elements
             let zero_mask = _mm_cmpeq_epi8(board, zero); // 0xFF for zeros
-            //let nonzero_mask = _mm_andnot_si128(nonzero_mask, _mm_set1_epi8(-1)); // Invert the mask
 
             // Set MSB based on mask
-            let msb = _mm_set1_epi8(-0x80); // MSB set in every byte
+            let msb = _mm_set1_epi8(0x80_u8 as i8); // MSB set in every byte
             let result = _mm_or_si128(_mm_andnot_si128(zero_mask, msb), board);
 
             Self(result)
@@ -110,7 +150,8 @@ impl Board {
 
         // SAFETY: Board is only instantiatable on avx2 ssse3
         unsafe {
-            let interleaved = interleave_board(board_mm128);
+            let board_mm256 = broadcast_256(board_mm128);
+            let interleaved = interleave_board(board_mm256);
 
             let mask = _mm256_movemask_epi8(interleaved);
             let pattern_idx = mask_to_idx(mask);
@@ -167,9 +208,9 @@ mod test {
 
         // Shuffle the values randomly
         nums.shuffle(&mut rand::rng());
-        use std::array as arr;
         let mut nums = nums.into_iter();
 
+        use std::array as arr;
         arr::from_fn(|_| arr::from_fn(|_| nums.next().unwrap_or(0)))
     }
 
@@ -191,16 +232,17 @@ mod test {
         });
 
         for board in test_cases {
-            let board_instance = unsafe { Board::from_array_unchecked(board) };
+            let board_instance = Board::from_array(board).unwrap();
             let baseline_output = baseline_swipe(board);
             let optimized_output = board_instance.compact_rows();
+            let baseline_board = Board::from_array(baseline_output).unwrap();
 
             assert_eq!(
                 optimized_output.to_array(),
                 baseline_output,
                 "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
                 board_instance,
-                unsafe { Board::from_array_unchecked(baseline_output) },
+                baseline_board,
                 optimized_output
             );
         }

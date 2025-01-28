@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 fn main() -> anyhow::Result<()> {
     let inputs: anyhow::Result<Vec<_>> = std::io::stdin()
         .lines()
