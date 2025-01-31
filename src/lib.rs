@@ -1,6 +1,7 @@
-#![feature(portable_simd)]
+#![feature(assert_matches)]
 
-pub mod simd;
+pub mod board;
+pub mod search;
 
 pub fn swipe_left_u8_inf_arr(cells: &mut [u8]) -> usize {
     // Find first non empty cell

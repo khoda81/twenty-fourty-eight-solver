@@ -1,6 +1,6 @@
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use itertools::Itertools as _;
-use twenty_fourty_eight_solver::simd::{BoardAvx2, test_utils};
+use twenty_fourty_eight_solver::board::{BoardAvx2, test_utils};
 
 /// Generate a vector of random boards for benchmarking.
 fn generate_boards(count: usize) -> Vec<[[u8; 4]; 4]> {

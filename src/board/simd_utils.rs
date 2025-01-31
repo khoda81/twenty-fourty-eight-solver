@@ -1,10 +1,5 @@
+use std::arch::x86_64::*;
 use std::mem::transmute as tb;
-use std::{
-    arch::x86_64::*,
-    fmt::{self, Write},
-};
-
-use thiserror::Error;
 
 #[macro_export]
 macro_rules! debug_println {
@@ -27,18 +22,19 @@ macro_rules! debug_print {
 }
 
 #[allow(unused_variables)]
-fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
+pub(crate) fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
     debug_print!("{name:15}: [");
 
     debug_print!("{:#010x}", inp[0]);
     for idx in &inp[1..] {
         debug_print!(", {idx:#010x}");
     }
+
     debug_println!("]");
 }
 
 #[allow(unused_variables)]
-fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
+pub(crate) fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
     debug_print!("{name:15}: [");
 
     debug_print!("{:#010b}", inp[0]);
@@ -49,36 +45,8 @@ fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
     debug_println!("]");
 }
 
-#[derive(Clone, Copy)]
-pub struct BoardAvx2(__m128i);
-
-impl PartialEq for BoardAvx2 {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe { _mm_movemask_epi8(_mm_cmpeq_epi8(self.0, other.0)) == 0xFFFF }
-    }
-}
-
-impl Eq for BoardAvx2 {}
-
-impl PartialOrd for BoardAvx2 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BoardAvx2 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::mem::transmute;
-
-        let a: u128 = unsafe { transmute(self.0) };
-        let b: u128 = unsafe { transmute(other.0) };
-
-        a.cmp(&b)
-    }
-}
-
 /// Load the lookup table as an AVX2 register.
-unsafe fn load_fill_table() -> __m256 {
+pub(crate) unsafe fn load_fill_table() -> __m256 {
     const E: i8 = -0x80; // Empty
     const PERM_LOOKUP: [[i8; 4]; 8] = [
         [3, E, E, E], // x000
@@ -96,7 +64,7 @@ unsafe fn load_fill_table() -> __m256 {
 }
 
 /// Load the lookup table as an AVX2 register.
-unsafe fn load_merge_table() -> __m256 {
+pub(crate) unsafe fn load_merge_table() -> __m256 {
     const E: i8 = 0x80_u8 as i8; // Empty
     const O: i8 = 0x05_u8 as i8; // Cell[1] + 1
     const T: i8 = 0x06_u8 as i8; // Cell[2] + 1
@@ -116,7 +84,7 @@ unsafe fn load_merge_table() -> __m256 {
 }
 
 /// Interleave the board data for mask extraction.
-unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
+pub(crate) unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
     let indices = [
         0xFFFFFFFF_03020100_u64,
         0xFFFFFFFF_07060504_u64,
@@ -132,7 +100,7 @@ unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
 }
 
 /// Broadcast the mask into an AVX2 register.
-unsafe fn mask_to_idx(mask: i32) -> __m256i {
+pub(crate) unsafe fn mask_to_idx(mask: i32) -> __m256i {
     let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
@@ -143,7 +111,7 @@ unsafe fn mask_to_idx(mask: i32) -> __m256i {
     }
 }
 
-unsafe fn merge_mask_to_idx(mask: i32) -> __m256i {
+pub(crate) unsafe fn merge_mask_to_idx(mask: i32) -> __m256i {
     let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
@@ -155,7 +123,7 @@ unsafe fn merge_mask_to_idx(mask: i32) -> __m256i {
 }
 
 /// Broadcast the mask into an AVX2 register.
-unsafe fn extract_board(compacted_board: __m256i) -> __m128i {
+pub(crate) unsafe fn extract_board(compacted_board: __m256i) -> __m128i {
     unsafe {
         let lo = _mm256_castsi256_si128(compacted_board); // Lower 128 bits (indices [0-3])
         let hi = _mm256_extracti128_si256::<1>(compacted_board); // Upper 128 bits (indices [4-7])
@@ -166,7 +134,7 @@ unsafe fn extract_board(compacted_board: __m256i) -> __m128i {
 }
 
 /// Broadcast the mask into an AVX2 register.
-unsafe fn get_merge_target(compacted_board: __m256i) -> __m256i {
+pub(crate) unsafe fn get_merge_target(compacted_board: __m256i) -> __m256i {
     let indices = [
         0x03020100_03020100_u64,
         0x0B0A0908_0B0A0908_u64,
@@ -187,12 +155,12 @@ unsafe fn get_merge_target(compacted_board: __m256i) -> __m256i {
 }
 
 /// Get row permutations based on the broadcasted mask.
-unsafe fn lookup(lookup_mm256: __m256, mask_broadcast: __m256i) -> __m256 {
+pub(crate) unsafe fn lookup(lookup_mm256: __m256, mask_broadcast: __m256i) -> __m256 {
     unsafe { _mm256_permutevar8x32_ps(lookup_mm256, mask_broadcast) }
 }
 
 /// Add row offsets to the row permutations.
-unsafe fn add_offsets(row_permutations: __m256) -> __m256i {
+pub(crate) unsafe fn add_offsets(row_permutations: __m256) -> __m256i {
     unsafe {
         let row_offsets = _mm256_set_epi64x(
             0x0C0C0C0C0C0C0C0C,
@@ -207,7 +175,7 @@ unsafe fn add_offsets(row_permutations: __m256) -> __m256i {
 }
 
 /// Add row offsets for merge
-unsafe fn add_merge_offsets(row_permutations: __m256) -> __m256i {
+pub(crate) unsafe fn add_merge_offsets(row_permutations: __m256) -> __m256i {
     unsafe {
         let row_offsets = _mm256_set_epi64x(
             0x0808080800000000,
@@ -222,12 +190,12 @@ unsafe fn add_merge_offsets(row_permutations: __m256) -> __m256i {
 }
 
 /// Shift cells to right for comparison mask
-unsafe fn comparison_target(board_mm256: __m256i) -> __m256i {
+pub(crate) unsafe fn comparison_target(board_mm256: __m256i) -> __m256i {
     unsafe { _mm256_alignr_epi8::<1>(board_mm256, board_mm256) }
 }
 
 /// Generate comparison mask
-unsafe fn compare_with_next(compacted_board_mm256: __m256i) -> i32 {
+pub(crate) unsafe fn compare_with_next(compacted_board_mm256: __m256i) -> i32 {
     unsafe {
         //f("compacted", &tb::<_, [u32; 8]>(compacted_board_mm256));
         let target = comparison_target(compacted_board_mm256);
@@ -244,7 +212,7 @@ unsafe fn compare_with_next(compacted_board_mm256: __m256i) -> i32 {
 /// target CPU supports AVX2 and SSSE3 instructions.
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "ssse3")]
-unsafe fn remove_msb(cells: __m128i) -> __m128i {
+pub(crate) unsafe fn remove_msb(cells: __m128i) -> __m128i {
     unsafe {
         let zeros = _mm_setzero_si128();
         let m = _mm_set1_epi8(0x7f);
@@ -258,7 +226,7 @@ unsafe fn remove_msb(cells: __m128i) -> __m128i {
 /// target CPU supports AVX2 and SSSE3 instructions.
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "ssse3")]
-unsafe fn set_msb(board: __m128i) -> __m128i {
+pub(crate) unsafe fn set_msb(board: __m128i) -> __m128i {
     unsafe {
         let zero = _mm_setzero_si128();
 
@@ -278,7 +246,7 @@ unsafe fn set_msb(board: __m128i) -> __m128i {
 /// target CPU supports AVX2 and SSSE3 instructions.
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "ssse3")]
-unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
+pub(crate) unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
     #[allow(clippy::missing_transmute_annotations)]
     unsafe {
         f("input", &tb::<_, [u32; 4]>(board_mm128));
@@ -336,7 +304,7 @@ unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
 
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "ssse3")]
-unsafe fn rotate_90(board: __m128i) -> __m128i {
+pub(crate) unsafe fn rotate_90(board: __m128i) -> __m128i {
     unsafe {
         // Shuffle mask for 90-degree clockwise rotation
         let shuffle_mask = _mm_set_epi8(
@@ -347,245 +315,5 @@ unsafe fn rotate_90(board: __m128i) -> __m128i {
         );
 
         _mm_shuffle_epi8(board, shuffle_mask)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("Required CPU features (AVX2 and SSSE3) are not available on this platform.")]
-pub struct MissingCpuFeatures;
-
-impl BoardAvx2 {
-    /// Safely creates a `Board` from a 2D array.
-    ///
-    /// # Errors
-    /// Returns a `MissingCpuFeatures` error if the CPU does not support the required AVX2 and SSSE3 features.
-    pub fn from_array(cells: [[u8; 4]; 4]) -> Result<Self, MissingCpuFeatures> {
-        if cfg!(target_arch = "x86_64")
-            && is_x86_feature_detected!("avx2")
-            && is_x86_feature_detected!("ssse3")
-        {
-            // Safety: We've verified the platform supports AVX2 and SSSE3.
-            Ok(unsafe { Self::from_array_unchecked(cells) })
-        } else {
-            Err(MissingCpuFeatures)
-        }
-    }
-
-    /// # Safety
-    /// This function uses unsafe SIMD intrinsics. The caller must ensure that the
-    /// target CPU supports AVX2 and SSSE3 instructions.
-    #[target_feature(enable = "avx2")]
-    #[target_feature(enable = "ssse3")]
-    pub unsafe fn from_array_unchecked(cells: [[u8; 4]; 4]) -> Self {
-        unsafe {
-            let flat_cells: [u8; 16] = std::mem::transmute(cells); // Flatten 2D array to 1D
-            let board = _mm_loadu_si128(flat_cells.as_ptr() as *const __m128i);
-            Self(set_msb(board))
-        }
-    }
-
-    pub fn to_array(self) -> [[u8; 4]; 4] {
-        // SAFETY: Board is only instantiatable on avx2 ssse3
-        // SAFETY: Board has the same bit representation as a byte slice
-        unsafe { std::mem::transmute(remove_msb(self.0)) }
-    }
-
-    /// Compact rows of a 2048 board using SIMD intrinsics.
-    pub fn swipe_right(self) -> Self {
-        // SAFETY: Board is only instantiatable on avx2 ssse3
-        Self(unsafe { swipe_right_simd(self.0) })
-    }
-
-    /// Rotate the board 90deg
-    pub fn rotate_90(self) -> Self {
-        Self(unsafe { rotate_90(self.0) })
-    }
-}
-
-#[target_feature(enable = "avx2")]
-#[target_feature(enable = "ssse3,bmi2")]
-pub unsafe fn bit_indices_pext(mut x: u16) -> [u8; 16] {
-    let mut indices = [0u8; 16];
-
-    for _ in 0..16 {
-        let bit_idx = x.trailing_zeros() + 1;
-        indices[bit_idx as usize] = 1;
-
-        x ^= 1 << bit_idx;
-    }
-
-    indices
-}
-
-#[target_feature(enable = "avx2,ssse3,bmi2")]
-pub unsafe fn bit_indices(x: u16) -> [u8; 16] {
-    let mut result = [0u8; 16];
-
-    // Extract bits using parallel lookup
-    let mut i = 0;
-    let mut value = x;
-    while value != 0 {
-        let tz = value.trailing_zeros() as u8; // Find lowest set bit
-        result[i] = tz;
-        i += 1;
-        value &= value - 1; // Clear lowest bit
-    }
-
-    result
-}
-
-impl fmt::Debug for BoardAvx2 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut rows = self.to_array().into_iter();
-
-        if let Some(row) = rows.next() {
-            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
-        }
-
-        for row in rows {
-            f.write_char('\n')?;
-            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
-        }
-
-        Ok(())
-    }
-}
-
-pub mod test_utils {
-    use itertools::Itertools as _;
-    use rand;
-    use rand::seq::{IndexedRandom as _, SliceRandom};
-
-    pub fn generate_random_board<const N: usize, const M: usize>(
-        filled: u8,
-        duplicates: u8,
-    ) -> [[u8; N]; M] {
-        let mut nums = Vec::with_capacity(16);
-        nums.extend(1..filled + 1);
-
-        // Add duplicates
-        if !nums.is_empty() {
-            let duplicates = (0..duplicates)
-                .map(|_| *nums.choose(&mut rand::rng()).unwrap())
-                .collect_vec();
-
-            nums.extend(duplicates);
-        }
-
-        nums.resize(N * M, 0);
-
-        // Shuffle the values randomly
-        nums.shuffle(&mut rand::rng());
-        let mut nums = nums.into_iter();
-
-        use std::array as arr;
-        arr::from_fn(|_| arr::from_fn(|_| nums.next().unwrap_or(0)))
-    }
-
-    pub fn baseline_swipe<const N: usize, const M: usize>(board: [[u8; N]; M]) -> [[u8; N]; M] {
-        board.map(|mut row| {
-            crate::swipe_left_u8_inf_arr(&mut row);
-            //crate::swipe_right_u8_inf_arr(&mut row);
-            //row.reverse();
-            row
-        })
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use itertools::Itertools;
-
-    use super::*;
-
-    #[test]
-    fn test_compact() {
-        const N: i32 = 200;
-
-        let test_cases = (0..16).flat_map(|filled| {
-            (0..N).map(move |_|
-            // Generate a random board with the specified number of filled cells
-            test_utils::generate_random_board::<4, 4>(filled, 0))
-        });
-
-        for board in test_cases {
-            test_swipe(board)
-        }
-    }
-
-    #[test]
-    fn test_merge() {
-        const N: i32 = 20;
-
-        let test_cases = (0..16).flat_map(|filled| {
-            (0..filled).cartesian_product(0..N).map(move |(dup, _)|
-            // Generate a random board with the specified number of filled cells
-            test_utils::generate_random_board::<4, 4>(filled, dup))
-        });
-
-        for board in test_cases {
-            test_swipe(board)
-        }
-    }
-
-    #[test]
-    fn test_merge_0() {
-        test_swipe([[0, 1, 0, 1], [0, 2, 2, 1], [2, 2, 2, 1], [1, 1, 1, 1]]);
-    }
-
-    #[test]
-    fn test_merge_1() {
-        test_swipe([[0, 0, 0, 1], [0, 0, 2, 3], [0, 3, 4, 5], [6, 7, 8, 9]]);
-    }
-
-    #[test]
-    fn test_merge_2() {
-        test_swipe([[0, 0, 0, 1], [0, 0, 2, 2], [0, 3, 3, 3], [4, 4, 4, 4]]);
-    }
-
-    #[test]
-    fn test_merge_3() {
-        test_swipe([[0, 0, 0, 1], [0, 0, 0, 2], [0, 0, 0, 3], [0, 0, 0, 4]]);
-    }
-
-    #[test]
-    fn test_merge_4() {
-        test_swipe([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [
-            13, 14, 15, 16,
-        ]]);
-    }
-
-    #[test]
-    fn test_merge_5() {
-        test_swipe([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0]]);
-    }
-
-    #[test]
-    fn test_rot90() {
-        let board = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [
-            13, 14, 15, 16,
-        ]];
-        let output = [[1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15], [
-            4, 8, 12, 16,
-        ]];
-
-        let board = BoardAvx2::from_array(board).unwrap();
-        let rotated = board.rotate_90();
-        let output = BoardAvx2::from_array(output).unwrap();
-        assert_eq!(rotated, output);
-    }
-
-    fn test_swipe(board: [[u8; 4]; 4]) {
-        let board_instance = BoardAvx2::from_array(board).unwrap();
-        let baseline_output = test_utils::baseline_swipe(board);
-        let optimized_output = board_instance.swipe_right();
-
-        let baseline_board = BoardAvx2::from_array(baseline_output).unwrap();
-
-        assert_eq!(
-            optimized_output, baseline_board,
-            "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
-            board_instance, baseline_board, optimized_output
-        );
     }
 }
