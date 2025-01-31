@@ -14,7 +14,7 @@ need_stdout = true
 allow_warnings = true
 
 [jobs.bench]
-command = ["cargo", "bench"]
+command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "initial_baseline"]
 need_stdout = true
 allow_warnings = true
 

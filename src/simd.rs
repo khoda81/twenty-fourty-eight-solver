@@ -52,6 +52,31 @@ fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
 #[derive(Clone, Copy)]
 pub struct BoardAvx2(__m128i);
 
+impl PartialEq for BoardAvx2 {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { _mm_movemask_epi8(_mm_cmpeq_epi8(self.0, other.0)) == 0xFFFF }
+    }
+}
+
+impl Eq for BoardAvx2 {}
+
+impl PartialOrd for BoardAvx2 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BoardAvx2 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::mem::transmute;
+
+        let a: u128 = unsafe { transmute(self.0) };
+        let b: u128 = unsafe { transmute(other.0) };
+
+        a.cmp(&b)
+    }
+}
+
 /// Load the lookup table as an AVX2 register.
 unsafe fn load_fill_table() -> __m256 {
     const E: i8 = -0x80; // Empty
@@ -108,20 +133,6 @@ unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
 
 /// Broadcast the mask into an AVX2 register.
 unsafe fn mask_to_idx(mask: i32) -> __m256i {
-    //let indices = [
-    //    0xFFFFFFFF_FFFFFF00_u64,
-    //    0xFFFFFF00_FFFFFF01_u64,
-    //    0xFFFFFFFF_FFFFFF02_u64,
-    //    0xFFFFFFFF_FFFFFF03_u64,
-    //];
-    //
-    //unsafe {
-    //    let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
-    //
-    //    let mask_broadcast = _mm256_set1_epi32(mask);
-    //    _mm256_shuffle_epi8(mask_broadcast, indices)
-    //}
-    //let [a, b, c, d] = mask.to_le_bytes();
     let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
@@ -133,19 +144,6 @@ unsafe fn mask_to_idx(mask: i32) -> __m256i {
 }
 
 unsafe fn merge_mask_to_idx(mask: i32) -> __m256i {
-    //let indices = [
-    //    0xFFFFFF01_FFFFFF00_u64,
-    //    0xFFFFFFFF_FFFFFFFF_u64,
-    //    0xFFFFFFFF_FFFFFFFF_u64,
-    //    0xFFFFFF03_FFFFFF02_u64,
-    //];
-    //
-    //unsafe {
-    //    let mask_broadcast = _mm256_set1_epi32(mask);
-    //
-    //    let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
-    //    _mm256_shuffle_epi8(mask_broadcast, indices)
-    //}
     let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
@@ -163,15 +161,6 @@ unsafe fn extract_board(compacted_board: __m256i) -> __m128i {
         let hi = _mm256_extracti128_si256::<1>(compacted_board); // Upper 128 bits (indices [4-7])
 
         // Create a shuffle mask for gathering [0, 2, 3] from lo and [5] from hi
-        //let lo = _mm_shuffle_epi32::<0b11001100>(lo); // [0, 2, 3, X]
-        //let hi = _mm_shuffle_epi32::<0b11001100>(hi); // Extract index 5
-
-        //f("lo", &tb::<_, [u32; 4]>(lo));
-        //f("hi", &tb::<_, [u32; 4]>(hi));
-        //let compacted_board = _mm256_castsi256_ps(compacted_board);
-        //let out = _mm256_permute_ps::<0b00011011>(compacted_board);
-        //let out = _mm256_castps_si256(out);
-        //_mm256_castsi256_si128(out)
         _mm_blend_epi32::<0b1100>(lo, hi)
     }
 }
@@ -362,6 +351,22 @@ unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
     }
 }
 
+#[target_feature(enable = "avx2")]
+#[target_feature(enable = "ssse3")]
+unsafe fn rotate_90(board: __m128i) -> __m128i {
+    unsafe {
+        // Shuffle mask for 90-degree clockwise rotation
+        let shuffle_mask = _mm_set_epi8(
+            15, 11, 7, 3, // Last column becomes first row
+            14, 10, 6, 2, // Third column becomes second row
+            13, 9, 5, 1, // Second column becomes third row
+            12, 8, 4, 0, // First column becomes fourth row
+        );
+
+        _mm_shuffle_epi8(board, shuffle_mask)
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("Required CPU features (AVX2 and SSSE3) are not available on this platform.")]
 pub struct MissingCpuFeatures;
@@ -406,6 +411,11 @@ impl BoardAvx2 {
     pub fn swipe_right(self) -> Self {
         // SAFETY: Board is only instantiatable on avx2 ssse3
         Self(unsafe { swipe_right_simd(self.0) })
+    }
+
+    /// Rotate the board 90deg
+    pub fn rotate_90(self) -> Self {
+        Self(unsafe { rotate_90(self.0) })
     }
 }
 
@@ -535,6 +545,21 @@ mod test {
         test_swipe([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0]]);
     }
 
+    #[test]
+    fn test_rot90() {
+        let board = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [
+            13, 14, 15, 16,
+        ]];
+        let output = [[1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15], [
+            4, 8, 12, 16,
+        ]];
+
+        let board = BoardAvx2::from_array(board).unwrap();
+        let rotated = board.rotate_90();
+        let output = BoardAvx2::from_array(output).unwrap();
+        assert_eq!(rotated, output);
+    }
+
     fn test_swipe(board: [[u8; 4]; 4]) {
         let board_instance = BoardAvx2::from_array(board).unwrap();
         let baseline_output = test_utils::baseline_swipe(board);
@@ -543,46 +568,9 @@ mod test {
         let baseline_board = BoardAvx2::from_array(baseline_output).unwrap();
 
         assert_eq!(
-            optimized_output.to_array(),
-            baseline_output,
+            optimized_output, baseline_board,
             "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
-            board_instance,
-            baseline_board,
-            optimized_output
+            board_instance, baseline_board, optimized_output
         );
-    }
-
-    #[test]
-    #[ignore]
-    fn test_endian() {
-        let a = [[0u8, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [
-            12, 13, 14, 15,
-        ]];
-
-        fn f<T: std::fmt::LowerHex>(inp: &[T]) {
-            debug_print!("merge_pattern: [");
-
-            debug_print!("{:#0x}", inp[0]);
-            for idx in &inp[1..] {
-                debug_print!(", {idx:#0x}");
-            }
-            debug_println!("]");
-        }
-
-        unsafe {
-            f(&tb::<_, [u8; 16]>(a));
-            f(&tb::<_, [u16; 8]>(a));
-            f(&tb::<_, [u32; 4]>(a));
-            f(&tb::<_, [u64; 2]>(a));
-            f(&tb::<_, [u128; 1]>(a));
-            let b = _mm_loadu_si32(a.as_ptr().cast());
-            let c = _mm_loadu_ps(a.as_ptr().cast());
-        }
-
-        let bytes = a.as_flattened().try_into().unwrap();
-        let asdfa = u128::from_le_bytes(bytes);
-        f(&[asdfa]);
-
-        panic!();
     }
 }
