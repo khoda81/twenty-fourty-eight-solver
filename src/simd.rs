@@ -6,6 +6,49 @@ use std::{
 
 use thiserror::Error;
 
+#[macro_export]
+macro_rules! debug_println {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! debug_print {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            eprint!($($arg)*);
+        }
+    };
+}
+
+#[allow(unused_variables)]
+fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
+    debug_print!("{name:15}: [");
+
+    debug_print!("{:#010x}", inp[0]);
+    for idx in &inp[1..] {
+        debug_print!(", {idx:#010x}");
+    }
+    debug_println!("]");
+}
+
+#[allow(unused_variables)]
+fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
+    debug_print!("{name:15}: [");
+
+    debug_print!("{:#010b}", inp[0]);
+    for idx in &inp[1..] {
+        debug_print!(", {idx:#010b}")
+    }
+
+    debug_println!("]");
+}
+
 #[derive(Clone, Copy)]
 pub struct BoardAvx2(__m128i);
 
@@ -13,14 +56,14 @@ pub struct BoardAvx2(__m128i);
 unsafe fn load_fill_table() -> __m256 {
     const E: i8 = -0x80; // Empty
     const PERM_LOOKUP: [[i8; 4]; 8] = [
-        [0, E, E, E], // x000
-        [3, 0, E, E], // x001
-        [2, 0, E, E], // x010
-        [3, 2, 0, E], // x011
-        [1, 0, E, E], // x100
-        [3, 1, 0, E], // x101
-        [2, 1, 0, E], // x110
-        [3, 2, 1, 0], // x111
+        [3, E, E, E], // x000
+        [0, 3, E, E], // x001
+        [1, 3, E, E], // x010
+        [0, 1, 3, E], // x011
+        [2, 3, E, E], // x100
+        [0, 2, 3, E], // x101
+        [1, 2, 3, E], // x110
+        [0, 1, 2, 3], // x111
     ];
 
     let lookup_ptr = PERM_LOOKUP.as_flattened().as_ptr();
@@ -50,10 +93,10 @@ unsafe fn load_merge_table() -> __m256 {
 /// Interleave the board data for mask extraction.
 unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
     let indices = [
-        0xFFFFFFFF_00010203_u64,
-        0xFFFFFFFF_04050607_u64,
-        0xFFFFFFFF_08090A0B_u64,
-        0xFFFFFFFF_0C0D0E0F_u64,
+        0xFFFFFFFF_03020100_u64,
+        0xFFFFFFFF_07060504_u64,
+        0xFFFFFFFF_0B0A0908_u64,
+        0xFFFFFFFF_0F0E0D0C_u64,
     ];
 
     unsafe {
@@ -65,56 +108,63 @@ unsafe fn interleave_board(board_mm256: __m256i) -> __m256i {
 
 /// Broadcast the mask into an AVX2 register.
 unsafe fn mask_to_idx(mask: i32) -> __m256i {
-    let indices = [
-        0xFFFFFFFF_FFFFFF00_u64,
-        0xFFFFFFFF_FFFFFF01_u64,
-        0xFFFFFFFF_FFFFFF02_u64,
-        0xFFFFFFFF_FFFFFF03_u64,
-    ];
+    //let indices = [
+    //    0xFFFFFFFF_FFFFFF00_u64,
+    //    0xFFFFFF00_FFFFFF01_u64,
+    //    0xFFFFFFFF_FFFFFF02_u64,
+    //    0xFFFFFFFF_FFFFFF03_u64,
+    //];
+    //
+    //unsafe {
+    //    let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
+    //
+    //    let mask_broadcast = _mm256_set1_epi32(mask);
+    //    _mm256_shuffle_epi8(mask_broadcast, indices)
+    //}
+    //let [a, b, c, d] = mask.to_le_bytes();
+    let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
-        let mask_broadcast = _mm256_set1_epi32(mask);
-
-        let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
-        _mm256_shuffle_epi8(mask_broadcast, indices)
+        _mm256_set_epi8(
+            -1, -1, -1, -1, -1, -1, -1, a, -1, -1, -1, -1, -1, -1, -1, b, -1, -1, -1, -1, -1, -1,
+            -1, c, -1, -1, -1, -1, -1, -1, -1, d,
+        )
     }
 }
 
 unsafe fn merge_mask_to_idx(mask: i32) -> __m256i {
-    let indices = [
-        0xFFFFFF00_FFFFFF00_u64,
-        0xFFFFFF01_FFFFFF01_u64,
-        0xFFFFFF02_FFFFFF02_u64,
-        0xFFFFFF03_FFFFFF03_u64,
-    ];
+    //let indices = [
+    //    0xFFFFFF01_FFFFFF00_u64,
+    //    0xFFFFFFFF_FFFFFFFF_u64,
+    //    0xFFFFFFFF_FFFFFFFF_u64,
+    //    0xFFFFFF03_FFFFFF02_u64,
+    //];
+    //
+    //unsafe {
+    //    let mask_broadcast = _mm256_set1_epi32(mask);
+    //
+    //    let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
+    //    _mm256_shuffle_epi8(mask_broadcast, indices)
+    //}
+    let [d, c, b, a] = mask.to_le_bytes().map(|i| i as i8);
 
     unsafe {
-        let mask_broadcast = _mm256_set1_epi32(mask);
-
-        let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
-        _mm256_shuffle_epi8(mask_broadcast, indices)
+        _mm256_set_epi8(
+            -1, -1, -1, a, -1, -1, -1, b, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, c, -1, -1, -1, d,
+        )
     }
 }
 
 /// Broadcast the mask into an AVX2 register.
 unsafe fn extract_board(compacted_board: __m256i) -> __m128i {
-    fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
-        eprint!("{name:15}: [");
-
-        eprint!("{:#010x}", inp[0]);
-        for idx in &inp[1..] {
-            eprint!(", {idx:#010x}");
-        }
-        eprintln!("]");
-    }
-
     unsafe {
         let lo = _mm256_castsi256_si128(compacted_board); // Lower 128 bits (indices [0-3])
         let hi = _mm256_extracti128_si256::<1>(compacted_board); // Upper 128 bits (indices [4-7])
 
         // Create a shuffle mask for gathering [0, 2, 3] from lo and [5] from hi
-        let lo = _mm_shuffle_epi32::<0b11001100>(lo); // [0, 2, 3, X]
-        let hi = _mm_shuffle_epi32::<0b11001100>(hi); // Extract index 5
+        //let lo = _mm_shuffle_epi32::<0b11001100>(lo); // [0, 2, 3, X]
+        //let hi = _mm_shuffle_epi32::<0b11001100>(hi); // Extract index 5
 
         //f("lo", &tb::<_, [u32; 4]>(lo));
         //f("hi", &tb::<_, [u32; 4]>(hi));
@@ -171,10 +221,10 @@ unsafe fn add_offsets(row_permutations: __m256) -> __m256i {
 unsafe fn add_merge_offsets(row_permutations: __m256) -> __m256i {
     unsafe {
         let row_offsets = _mm256_set_epi64x(
-            0x0808080808080808,
+            0x0808080800000000,
             0x0000000000000000,
-            0x0808080808080808,
             0x0000000000000000,
+            0x0808080800000000,
         );
 
         let row_permutations = _mm256_castps_si256(row_permutations);
@@ -206,16 +256,6 @@ unsafe fn comparison_target(board_mm256: __m256i) -> __m256i {
 
 /// Generate comparison mask
 unsafe fn compare_with_next(compacted_board_mm256: __m256i) -> i32 {
-    fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
-        eprint!("{name:15}: [");
-
-        eprint!("{:#010x}", inp[0]);
-        for idx in &inp[1..] {
-            eprint!(", {idx:#010x}");
-        }
-        eprintln!("]");
-    }
-
     unsafe {
         //f("compacted", &tb::<_, [u32; 8]>(compacted_board_mm256));
         let target = comparison_target(compacted_board_mm256);
@@ -255,6 +295,7 @@ unsafe fn set_msb(board: __m128i) -> __m128i {
 
         // Set MSB based on mask
         let msb = _mm_set1_epi8(0x80_u8 as i8);
+
         // MSB set in every byte
         _mm_or_si128(_mm_andnot_si128(zero_mask, msb), board)
     }
@@ -266,40 +307,23 @@ unsafe fn set_msb(board: __m128i) -> __m128i {
 #[target_feature(enable = "avx2")]
 #[target_feature(enable = "ssse3")]
 unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
-    fn f<T: std::fmt::LowerHex>(name: &str, inp: &[T]) {
-        eprint!("{name:15}: [");
-
-        eprint!("{:#010x}", inp[0]);
-        for idx in &inp[1..] {
-            eprint!(", {idx:#010x}");
-        }
-        eprintln!("]");
-    }
-
-    fn fb<T: std::fmt::Binary>(name: &str, inp: &[T]) {
-        eprint!("{name:15}: [");
-
-        eprint!("{:#010b}", inp[0]);
-        for idx in &inp[1..] {
-            eprint!(", {idx:#010b}");
-        }
-        eprintln!("]");
-    }
-
+    #[allow(clippy::missing_transmute_annotations)]
     unsafe {
-        use std::mem::transmute as tb;
+        f("input", &tb::<_, [u32; 4]>(board_mm128));
+        //let fill_mask = _mm_movemask_epi8(board_mm128);
+        //let fill_mask = fill_mask | ((fill_mask >> 4) << 16);
 
         let board_mm256 = _mm256_set_m128i(board_mm128, board_mm128); // u8x4x4x2
         let interleaved = interleave_board(board_mm256); // x x x x 0 1 2 3 x x x ...
 
-        //f("interleaved", &tb::<_, [u32; 8]>(interleaved));
-        //eprintln!("interleaved: {:?}", tb::<_, [u32; 8]>(interleaved));
+        f("interleaved", &tb::<_, [u32; 8]>(interleaved));
+        debug_println!("interleaved: {:?}", tb::<_, [u32; 8]>(interleaved));
         let fill_mask = _mm256_movemask_epi8(interleaved);
         let fill_pattern_idx = mask_to_idx(fill_mask); // u32x4
 
-        //eprintln!("fill_mask: {:032b}", fill_mask);
-        //fb("fill_pattern_id", &tb::<_, [u32; 8]>(fill_pattern_idx));
-        //eprintln!(
+        debug_println!("fill_mask:       {:032b}", fill_mask);
+        fb("fill_pattern_id", &tb::<_, [u32; 8]>(fill_pattern_idx));
+        //debug_println!(
         //    "fill_pattern_idx: {:?}",
         //    tb::<_, [u32; 8]>(interleaved).map(|i| i & 7)
         //);
@@ -309,34 +333,30 @@ unsafe fn swipe_right_simd(board_mm128: __m128i) -> __m128i {
         let permutations = add_offsets(row_permutations);
         let compacted_board = _mm256_shuffle_epi8(board_mm256, permutations);
 
+        f("compacted_board", &tb::<_, [u32; 8]>(compacted_board));
+
         let eq_mask = compare_with_next(compacted_board);
         let merge_pattern_idx = merge_mask_to_idx(eq_mask);
-        //eprintln!("eq_mask: {eq_mask:032b}");
-        //fb("eq_mask", &tb::<_, [u32; 8]>(merge_pattern_idx));
+        debug_println!("eq_mask: {eq_mask:032b}");
+        fb("eq_mask", &tb::<_, [u32; 8]>(merge_pattern_idx));
         let merge_lookup = load_merge_table();
         let merge_pattern = lookup(merge_lookup, merge_pattern_idx);
-        //f("merge_pattern", &tb::<_, [u32; 8]>(merge_pattern));
+        f("merge_pattern", &tb::<_, [u32; 8]>(merge_pattern));
         let merge_target_idx = add_merge_offsets(merge_pattern);
-        //f("merge_target_id", &tb::<_, [u32; 8]>(merge_target_idx));
+        f("merge_target_id", &tb::<_, [u32; 8]>(merge_target_idx));
 
         let merge_target = get_merge_target(compacted_board);
-        //f("merge_target", &tb::<_, [u32; 8]>(merge_target));
+        f("merge_target", &tb::<_, [u32; 8]>(merge_target));
         let merged = _mm256_shuffle_epi8(merge_target, merge_target_idx);
-        //f("merged", &tb::<_, [u32; 8]>(merged));
+        f("merged", &tb::<_, [u32; 8]>(merged));
 
-        //eprintln!("merge_pattern: {:?}", tb::<_, [u32; 8]>(merge_pattern_idx));
-        //eprintln!(
-        //    "merge_pattern: {:?}",
-        //    tb::<_, [u32; 8]>(merge_pattern_idx).map(|i| i & 7)
-        //);
-        //
-        //eprintln!("merge_pattern: [");
-        //for idx in tb::<_, [u32; 8]>(merge_pattern_idx) {
-        //    eprintln!("    {idx:b},");
-        //}
-        //eprintln!("]");
-        //let eq_mask = compare_with_next(board_mm256, interleaved);
-        //let merge_pattern_idx = mask_to_idx(eq_mask);
+        debug_println!("merge_pattern: {:?}", tb::<_, [u32; 8]>(merge_pattern_idx));
+        debug_println!(
+            "merge_pattern: {:?}",
+            tb::<_, [u32; 8]>(merge_pattern_idx).map(|i| i & 7)
+        );
+
+        fb("merge_pattern", &tb::<_, [u32; 8]>(merge_pattern_idx));
 
         extract_board(merged)
     }
@@ -406,14 +426,12 @@ impl fmt::Debug for BoardAvx2 {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use itertools::Itertools;
-    use rand::seq::{IndexedRandom, SliceRandom};
+pub mod test_utils {
+    use itertools::Itertools as _;
+    use rand;
+    use rand::seq::{IndexedRandom as _, SliceRandom};
 
-    use super::*;
-
-    fn generate_random_board<const N: usize, const M: usize>(
+    pub fn generate_random_board<const N: usize, const M: usize>(
         filled: u8,
         duplicates: u8,
     ) -> [[u8; N]; M] {
@@ -421,11 +439,14 @@ mod test {
         nums.extend(1..filled + 1);
 
         // Add duplicates
-        let duplicates = (0..duplicates)
-            .map(|_| *nums.choose(&mut rand::rng()).unwrap())
-            .collect_vec();
+        if !nums.is_empty() {
+            let duplicates = (0..duplicates)
+                .map(|_| *nums.choose(&mut rand::rng()).unwrap())
+                .collect_vec();
 
-        nums.extend(duplicates);
+            nums.extend(duplicates);
+        }
+
         nums.resize(N * M, 0);
 
         // Shuffle the values randomly
@@ -436,51 +457,87 @@ mod test {
         arr::from_fn(|_| arr::from_fn(|_| nums.next().unwrap_or(0)))
     }
 
-    fn baseline_swipe<const N: usize, const M: usize>(board: [[u8; N]; M]) -> [[u8; N]; M] {
+    pub fn baseline_swipe<const N: usize, const M: usize>(board: [[u8; N]; M]) -> [[u8; N]; M] {
         board.map(|mut row| {
-            crate::swipe_right_u8_inf_arr(&mut row);
-            row.reverse();
+            crate::swipe_left_u8_inf_arr(&mut row);
+            //crate::swipe_right_u8_inf_arr(&mut row);
+            //row.reverse();
             row
         })
     }
+}
+
+#[cfg(test)]
+mod test {
+    use itertools::Itertools;
+
+    use super::*;
 
     #[test]
     fn test_compact() {
-        const N: i32 = 2000;
+        const N: i32 = 200;
 
         let test_cases = (0..16).flat_map(|filled| {
             (0..N).map(move |_|
             // Generate a random board with the specified number of filled cells
-            generate_random_board::<4, 4>(filled, 0))
+            test_utils::generate_random_board::<4, 4>(filled, 0))
         });
 
         for board in test_cases {
-            let board_instance = BoardAvx2::from_array(board).unwrap();
-            let baseline_output = baseline_swipe(board);
-            let optimized_output = board_instance.swipe_right();
-            let baseline_board = BoardAvx2::from_array(baseline_output).unwrap();
-
-            assert_eq!(
-                optimized_output.to_array(),
-                baseline_output,
-                "Mismatch found for board: \n{:?}\nBaseline:\n{:?}\nOptimized:\n{:?}",
-                board_instance,
-                baseline_board,
-                optimized_output
-            );
+            test_swipe(board)
         }
     }
 
     #[test]
     fn test_merge() {
-        let board = [[0, 1, 0, 1], [0, 2, 2, 1], [2, 2, 2, 1], [1, 1, 1, 1]];
-        //let board = [[0, 0, 0, 1], [0, 0, 2, 3], [0, 3, 4, 5], [6, 7, 8, 9]];
-        //let board = [[0, 0, 0, 1], [0, 0, 2, 2], [0, 3, 3, 3], [4, 4, 4, 4]];
-        //let board = [[0, 0, 0, 1], [0, 0, 0, 2], [0, 0, 0, 3], [0, 0, 0, 4]];
-        //let board = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
+        const N: i32 = 20;
 
+        let test_cases = (0..16).flat_map(|filled| {
+            (0..filled).cartesian_product(0..N).map(move |(dup, _)|
+            // Generate a random board with the specified number of filled cells
+            test_utils::generate_random_board::<4, 4>(filled, dup))
+        });
+
+        for board in test_cases {
+            test_swipe(board)
+        }
+    }
+
+    #[test]
+    fn test_merge_0() {
+        test_swipe([[0, 1, 0, 1], [0, 2, 2, 1], [2, 2, 2, 1], [1, 1, 1, 1]]);
+    }
+
+    #[test]
+    fn test_merge_1() {
+        test_swipe([[0, 0, 0, 1], [0, 0, 2, 3], [0, 3, 4, 5], [6, 7, 8, 9]]);
+    }
+
+    #[test]
+    fn test_merge_2() {
+        test_swipe([[0, 0, 0, 1], [0, 0, 2, 2], [0, 3, 3, 3], [4, 4, 4, 4]]);
+    }
+
+    #[test]
+    fn test_merge_3() {
+        test_swipe([[0, 0, 0, 1], [0, 0, 0, 2], [0, 0, 0, 3], [0, 0, 0, 4]]);
+    }
+
+    #[test]
+    fn test_merge_4() {
+        test_swipe([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [
+            13, 14, 15, 16,
+        ]]);
+    }
+
+    #[test]
+    fn test_merge_5() {
+        test_swipe([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0]]);
+    }
+
+    fn test_swipe(board: [[u8; 4]; 4]) {
         let board_instance = BoardAvx2::from_array(board).unwrap();
-        let baseline_output = baseline_swipe(board);
+        let baseline_output = test_utils::baseline_swipe(board);
         let optimized_output = board_instance.swipe_right();
 
         let baseline_board = BoardAvx2::from_array(baseline_output).unwrap();
@@ -503,13 +560,13 @@ mod test {
         ]];
 
         fn f<T: std::fmt::LowerHex>(inp: &[T]) {
-            eprint!("merge_pattern: [");
+            debug_print!("merge_pattern: [");
 
-            eprint!("{:#0x}", inp[0]);
+            debug_print!("{:#0x}", inp[0]);
             for idx in &inp[1..] {
-                eprint!(", {idx:#0x}");
+                debug_print!(", {idx:#0x}");
             }
-            eprintln!("]");
+            debug_println!("]");
         }
 
         unsafe {

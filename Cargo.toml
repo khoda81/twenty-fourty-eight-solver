@@ -7,10 +7,16 @@ edition = "2024"
 lto = true
 opt-level = 3
 
+[[bench]]
+name = "benchmarks"
+harness = false
+
 [dependencies]
 anyhow = "1.0"
 itertools = "0.14"
+rand = "0.9"
 thiserror = "2.0.11"
 
 [dev-dependencies]
+criterion = "0.5.1"
 rand = "0.9"

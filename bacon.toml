@@ -9,7 +9,12 @@ default_job = "check"
 env.CARGO_TERM_COLOR = "always"
 
 [jobs.asm]
-command = ["cargo", "asm", "--lib", "BoardAvx2::swipe_right", "--native", "--simplify"]
+command = ["cargo", "asm", "--lib", "BoardAvx2::swipe_right", "--native", "--simplify", "--color"]
+need_stdout = true
+allow_warnings = true
+
+[jobs.bench]
+command = ["cargo", "bench"]
 need_stdout = true
 allow_warnings = true
 
@@ -116,4 +121,5 @@ allow_warnings = true
 c = "job:clippy-all" # comment this to have 'c' run clippy on only the default target
 a = "job:asm"
 t = "job:test"
+b = "job:bench"
 
