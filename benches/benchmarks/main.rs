@@ -15,9 +15,11 @@ fn generate_boards(count: usize) -> Vec<[[u8; 4]; 4]> {
 
 /// Benchmark the SIMD-optimized implementation.
 fn bench_swipe(c: &mut Criterion) {
+    const COUNT: usize = 100;
+
     let mut group = c.benchmark_group("swipe");
 
-    let boards = generate_boards(1000);
+    let boards = generate_boards(COUNT);
     let simd_boards = boards
         .iter()
         .cloned()

@@ -223,24 +223,7 @@ unsafe fn add_merge_offsets(row_permutations: __m256) -> __m256i {
 
 /// Shift cells to right for comparison mask
 unsafe fn comparison_target(board_mm256: __m256i) -> __m256i {
-    //let indices = [
-    //    0xFFFFFFFF_020100FF_u64,
-    //    0xFFFFFFFF_050403FF_u64,
-    //    0xFFFFFFFF_090A0BFF_u64,
-    //    0xFFFFFFFF_0D0E0FFF_u64,
-    //];
-    let indices = [
-        0xFFFFFFFF_FF030201_u64,
-        0xFFFFFFFF_FF0B0A09_u64,
-        0xFFFFFFFF_FF030201_u64,
-        0xFFFFFFFF_FF0B0A09_u64,
-    ];
-
-    unsafe {
-        // Load into a YMM register
-        let indices = _mm256_loadu_si256(indices.as_ptr() as *const __m256i);
-        _mm256_shuffle_epi8(board_mm256, indices)
-    }
+    unsafe { _mm256_alignr_epi8::<1>(board_mm256, board_mm256) }
 }
 
 /// Generate comparison mask
@@ -417,6 +400,38 @@ impl BoardAvx2 {
     pub fn rotate_90(self) -> Self {
         Self(unsafe { rotate_90(self.0) })
     }
+}
+
+#[target_feature(enable = "avx2")]
+#[target_feature(enable = "ssse3,bmi2")]
+pub unsafe fn bit_indices_pext(mut x: u16) -> [u8; 16] {
+    let mut indices = [0u8; 16];
+
+    for _ in 0..16 {
+        let bit_idx = x.trailing_zeros() + 1;
+        indices[bit_idx as usize] = 1;
+
+        x ^= 1 << bit_idx;
+    }
+
+    indices
+}
+
+#[target_feature(enable = "avx2,ssse3,bmi2")]
+pub unsafe fn bit_indices(x: u16) -> [u8; 16] {
+    let mut result = [0u8; 16];
+
+    // Extract bits using parallel lookup
+    let mut i = 0;
+    let mut value = x;
+    while value != 0 {
+        let tz = value.trailing_zeros() as u8; // Find lowest set bit
+        result[i] = tz;
+        i += 1;
+        value &= value - 1; // Clear lowest bit
+    }
+
+    result
 }
 
 impl fmt::Debug for BoardAvx2 {

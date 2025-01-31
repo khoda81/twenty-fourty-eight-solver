@@ -1,12 +1,10 @@
-# This is a configuration file for the bacon tool
-#
-# Complete help on configuration: https://dystroy.org/bacon/config/
-# 
-# You may check the current default at
-#   https://github.com/Canop/bacon/blob/main/defaults/default-bacon.toml
-
-default_job = "check"
+default_job = "nextest"
 env.CARGO_TERM_COLOR = "always"
+wrap = false
+
+[sound]
+enabled = true
+base_volume = "100%" # global volume multiplier
 
 [jobs.asm]
 command = ["cargo", "asm", "--lib", "BoardAvx2::swipe_right", "--native", "--simplify", "--color"]
@@ -14,9 +12,11 @@ need_stdout = true
 allow_warnings = true
 
 [jobs.bench]
-command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "initial_baseline"]
+command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "initial_baseline", "--color=always"]
 need_stdout = true
 allow_warnings = true
+on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
+on_change_strategy = "kill_then_restart"
 
 [jobs.check]
 command = ["cargo", "check"]
@@ -54,6 +54,11 @@ need_stdout = false
 [jobs.test]
 command = ["cargo", "test"]
 need_stdout = true
+
+[jobs.test-asm]
+command = ["cargo", "test"]
+need_stdout = true
+on_success = "job:asm"
 
 [jobs.nextest]
 command = [
@@ -119,7 +124,6 @@ allow_warnings = true
 [keybindings]
 # alt-m = "job:my-job"
 c = "job:clippy-all" # comment this to have 'c' run clippy on only the default target
-a = "job:asm"
-t = "job:test"
+a = "job:test-asm"
+t = "job:nextest"
 b = "job:bench"
-
