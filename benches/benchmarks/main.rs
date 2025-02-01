@@ -49,6 +49,29 @@ fn bench_swipe(c: &mut Criterion) {
     });
 }
 
+fn bench_rotate(c: &mut Criterion) {
+    const COUNT: usize = 100;
+
+    let mut group = c.benchmark_group("rotate_90");
+
+    let boards = generate_boards(COUNT);
+    let simd_boards = boards
+        .iter()
+        .cloned()
+        .map(BoardAvx2::from_array)
+        .map(Result::unwrap)
+        .collect_vec();
+
+    group.throughput(Throughput::Elements(boards.len() as u64));
+
+    group.bench_function("simd_rotate_90", |b| {
+        b.iter(|| {
+            for board in simd_boards.iter() {
+                black_box(board.rotate_90());
+            }
+        });
+    });
+}
 /// Benchmark iterating over all boards and spawning until reaching the "Done" state.
 fn bench_spawn_until_done(c: &mut Criterion) {
     const COUNT: usize = 100;
@@ -120,6 +143,7 @@ fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_swipe,
+    bench_rotate,
     bench_spawn_until_done,
     bench_swipe_and_spawn_interleaved
 );
