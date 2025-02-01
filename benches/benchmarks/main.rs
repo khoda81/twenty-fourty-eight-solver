@@ -1,6 +1,9 @@
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use itertools::Itertools as _;
-use twenty_fourty_eight_solver::board::{BoardAvx2, test_utils};
+use twenty_fourty_eight_solver::{
+    board::{BoardAvx2, test_utils},
+    search::search_state::{CurrentState, EvaluationState},
+};
 
 /// Generate a vector of random boards for benchmarking.
 fn generate_boards(count: usize) -> Vec<[[u8; 4]; 4]> {
@@ -46,5 +49,78 @@ fn bench_swipe(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_swipe);
+/// Benchmark iterating over all boards and spawning until reaching the "Done" state.
+fn bench_spawn_until_done(c: &mut Criterion) {
+    const COUNT: usize = 100;
+
+    let mut group = c.benchmark_group("spawn_until_done");
+
+    let boards = generate_boards(COUNT);
+    let simd_boards = boards
+        .iter()
+        .cloned()
+        .map(BoardAvx2::from_array)
+        .map(Result::unwrap)
+        .collect_vec();
+
+    group.throughput(Throughput::Elements(boards.len() as u64));
+
+    group.bench_function("spawn_until_done", |b| {
+        b.iter(|| {
+            for board in &simd_boards {
+                let Some(mut state) = EvaluationState::from_board(*board) else {
+                    continue;
+                };
+
+                while let CurrentState::One | CurrentState::Two = state.next_spawn() {
+                    black_box(state.current_board());
+                }
+            }
+        });
+    });
+}
+
+/// Benchmark merging and spawning interleaved N times.
+fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
+    const COUNT: usize = 100;
+    const N: usize = 10;
+
+    let mut group = c.benchmark_group("merge_and_spawn_interleaved");
+
+    let boards = generate_boards(COUNT);
+    let simd_boards = boards
+        .iter()
+        .cloned()
+        .map(BoardAvx2::from_array)
+        .map(Result::unwrap)
+        .collect_vec();
+
+    group.throughput(Throughput::Elements(boards.len() as u64));
+
+    group.bench_function("merge_and_spawn_interleaved", |b| {
+        b.iter(|| {
+            for board in &simd_boards {
+                let mut board = *board;
+
+                for _ in 0..N {
+                    board = board.swipe_right().rotate_90();
+                    let Some(state) = EvaluationState::from_board(board) else {
+                        continue;
+                    };
+
+                    board = state.current_board();
+                }
+
+                black_box(board);
+            }
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_swipe,
+    bench_spawn_until_done,
+    bench_swipe_and_spawn_interleaved
+);
 criterion_main!(benches);

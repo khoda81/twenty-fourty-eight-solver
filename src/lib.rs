@@ -1,4 +1,5 @@
 #![feature(assert_matches)]
+#![feature(slice_swap_unchecked)]
 
 pub mod board;
 pub mod search;

@@ -63,7 +63,7 @@ on_success = "job:asm"
 
 [jobs.nextest]
 command = [
-    "cargo", "nextest", "run", "search_state",
+    "cargo", "nextest", "run", 
     "--hide-progress-bar", "--failure-output", "final"
 ]
 need_stdout = true
