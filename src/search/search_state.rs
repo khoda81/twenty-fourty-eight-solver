@@ -1,4 +1,4 @@
-use std::arch::x86_64::*;
+use std::{arch::x86_64::*, i16};
 
 use crate::board::BoardAvx2;
 
@@ -13,7 +13,7 @@ pub enum Transition {
 }
 
 impl SpawnIter {
-    pub fn from_board(board: BoardAvx2) -> Option<Self> {
+    pub fn new(board: BoardAvx2) -> Option<Self> {
         unsafe {
             let inner = board.into_inner();
             let msb = _mm_movemask_epi8(inner) as u16;
@@ -85,6 +85,16 @@ impl SpawnIter {
         }
     }
 
+    pub fn board(&self) -> BoardAvx2 {
+        let Self(mut inner) = *self;
+
+        let shifted = unsafe { _mm_slli_epi16::<1>(inner) };
+        let zeros = unsafe { _mm_setzero_si128() };
+        inner = unsafe { _mm_blendv_epi8(inner, zeros, shifted) };
+
+        BoardAvx2(inner)
+    }
+
     pub fn into_inner(self) -> __m128i {
         self.0
     }
@@ -94,8 +104,8 @@ impl SpawnIter {
 pub struct Evaluation(pub i16);
 
 impl Evaluation {
-    pub const TERM: Self = Evaluation(-0x00FF);
-    pub const MIN: Self = Evaluation(-0x00FF);
+    pub const TERM: Self = Evaluation(-0x07FF);
+    pub const MIN: Self = Evaluation(i16::MIN);
 }
 
 #[repr(C)]
@@ -184,8 +194,9 @@ mod test {
         let board = [[0, 1, 0, 1], [0, 2, 2, 1], [2, 2, 2, 1], [1, 1, 1, 1]];
         let board = crate::board::BoardAvx2::from_array(board).unwrap();
 
-        let mut search_state = SpawnIter::from_board(board).unwrap();
+        let mut search_state = SpawnIter::new(board).unwrap();
 
+        assert_eq!(search_state.board(), board);
         assert_eq!(search_state.current_board().to_array(), [
             [1, 1, 0, 1],
             [0, 2, 2, 1],
@@ -193,6 +204,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
         assert_eq!(search_state.current_board().to_array(), [
             [0, 1, 1, 1],
@@ -201,6 +213,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
         assert_eq!(search_state.current_board().to_array(), [
             [0, 1, 0, 1],
@@ -209,6 +222,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::Switch);
         assert_eq!(search_state.current_board().to_array(), [
             [2, 1, 0, 1],
@@ -217,6 +231,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
         assert_eq!(search_state.current_board().to_array(), [
             [0, 1, 2, 1],
@@ -225,6 +240,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
         assert_eq!(search_state.current_board().to_array(), [
             [0, 1, 0, 1],
@@ -233,6 +249,7 @@ mod test {
             [1, 1, 1, 1]
         ]);
 
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::Done);
         assert_matches!(search_state.next_spawn(), Transition::Done);
         assert_matches!(search_state.next_spawn(), Transition::Done);
@@ -242,7 +259,7 @@ mod test {
     fn test_full() {
         let board = [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]];
         let board = crate::board::BoardAvx2::from_array(board).unwrap();
-        let search_state = SpawnIter::from_board(board);
+        let search_state = SpawnIter::new(board);
         assert_matches!(search_state, None);
     }
 
@@ -251,7 +268,7 @@ mod test {
         let board = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
         let board = crate::board::BoardAvx2::from_array(board).unwrap();
 
-        let mut search_state = SpawnIter::from_board(board).unwrap();
+        let mut search_state = SpawnIter::new(board).unwrap();
 
         let find = |search_state: &SpawnIter| {
             search_state

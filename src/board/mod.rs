@@ -74,6 +74,15 @@ impl BoardAvx2 {
     pub fn into_inner(self) -> __m128i {
         self.0
     }
+
+    pub fn into_u128(self) -> u128 {
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn num_empty(self) -> u32 {
+        let msb = unsafe { _mm_movemask_epi8(self.0) as u16 };
+        msb.count_zeros()
+    }
 }
 
 impl PartialEq for BoardAvx2 {

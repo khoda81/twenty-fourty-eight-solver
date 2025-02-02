@@ -91,7 +91,7 @@ fn bench_spawn_until_done(c: &mut Criterion) {
     group.bench_function("spawn_until_done", |b| {
         b.iter(|| {
             for board in &simd_boards {
-                let Some(mut state) = SpawnIter::from_board(*board) else {
+                let Some(mut state) = SpawnIter::new(*board) else {
                     continue;
                 };
 
@@ -127,7 +127,7 @@ fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
 
                 for _ in 0..N {
                     board = board.swipe_right().rotate_90();
-                    let Some(state) = SpawnIter::from_board(board) else {
+                    let Some(state) = SpawnIter::new(board) else {
                         continue;
                     };
 

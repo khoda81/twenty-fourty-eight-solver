@@ -1,4 +1,7 @@
-use super::search_state::{Evaluation, EvaluationState, SpawnIter};
+use super::{
+    cache::EvaluationCache,
+    search_state::{Evaluation, EvaluationState, SpawnIter},
+};
 use crate::{board::BoardAvx2, search::search_state::Transition};
 use std::arch::x86_64::__m128i;
 
@@ -6,7 +9,9 @@ pub struct MeanMax {
     stack: Vec<u64>,
     /// Number of remaining recursions
     pub depth: u32,
-    pub counter: u32,
+    pub iteration_counter: u32,
+
+    cache: EvaluationCache,
 }
 
 impl MeanMax {
@@ -14,7 +19,8 @@ impl MeanMax {
         Self {
             stack: vec![],
             depth: 0,
-            counter: 0,
+            cache: EvaluationCache::new(),
+            iteration_counter: 0,
         }
     }
 
@@ -45,16 +51,13 @@ impl MeanMax {
     }
 
     fn pop_xmm(&mut self) -> __m128i {
-        //let a = self.stack.pop().expect("the stack shouldn't be empty");
-        //let b = self
-        //    .stack
-        //    .pop()
-        //    .expect("the stack should have at least two items");
+        debug_assert!(self.stack.len() >= 2);
 
         unsafe {
             let a = self.stack.pop().unwrap_unchecked();
             let b = self.stack.pop().unwrap_unchecked();
-            std::mem::transmute([b, a])
+            let _src = [b, a];
+            std::mem::transmute(_src)
         }
     }
 
@@ -68,9 +71,8 @@ impl MeanMax {
     }
 
     fn heuristic(&self, board: BoardAvx2) -> Evaluation {
-        // TODO:
-
-        Evaluation(0)
+        let num_empty = board.num_empty();
+        Evaluation(10 * (1 << num_empty))
     }
 
     #[inline(never)]
@@ -85,17 +87,18 @@ impl MeanMax {
         let mut state = State::EvaluateMove(board);
 
         loop {
-            self.counter += 1;
+            self.iteration_counter += 1;
             state = match state {
                 State::EvaluateMove(board) => {
-                    if self.depth == 0 {
+                    if let Some(eval) = self.cache.get(board, self.depth) {
+                        State::UpdateMoveEval(eval.clone())
+                    } else if self.depth == 0 {
                         State::UpdateMoveEval(self.heuristic(board))
-                    } else if let Some(iter) = SpawnIter::from_board(board) {
+                    } else if let Some(iter) = SpawnIter::new(board) {
                         self.depth -= 1;
                         State::ExpandMoves(iter, EvaluationState::new())
                     } else {
-                        // Unreachable
-                        State::UpdateMoveEval(Evaluation::TERM)
+                        unreachable!()
                     }
                 }
 
@@ -130,8 +133,10 @@ impl MeanMax {
                     };
 
                     if state.push_move_eval(eval) {
+                        // This was the last move, spawn
                         State::NextSpawn(state)
                     } else {
+                        // Evaluate next move
                         let board = BoardAvx2(self.pop_xmm());
                         self.push_state(state);
                         State::EvaluateMove(board)
@@ -140,17 +145,25 @@ impl MeanMax {
 
                 State::NextSpawn(state) => {
                     let mut iter = SpawnIter(self.pop_xmm());
+                    let board = iter.board();
                     match iter.next_spawn() {
                         Transition::None => State::ExpandMoves(iter, state),
                         Transition::Switch => State::ExpandMoves(iter, state.switch()),
                         Transition::Done => {
                             self.depth += 1;
-                            State::UpdateMoveEval(state.evaluate())
+                            let eval = state.evaluate();
+                            self.cache.insert(board, self.depth, eval.clone());
+
+                            State::UpdateMoveEval(eval)
                         }
                     }
                 }
             };
         }
+    }
+
+    pub fn cache(&self) -> &EvaluationCache {
+        &self.cache
     }
 }
 
@@ -163,12 +176,11 @@ impl Default for MeanMax {
 #[cfg(test)]
 mod test {
     use super::MeanMax;
-    use crate::board::BoardAvx2;
+    use crate::{board::BoardAvx2, search::search_state::Evaluation};
 
     #[test]
     fn test_mean_max() {
         let cells = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [1, 2, 3, 0]];
-        //let cells = [[0, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
@@ -178,8 +190,23 @@ mod test {
             "Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {}",
             eval.0
         );
-        eprintln!("Iterations: {}", mean_max.counter);
+        eprintln!("Iterations: {}", mean_max.iteration_counter);
 
-        panic!();
+        assert_eq!(move_idx, 2);
+        assert_eq!(eval, Evaluation(-1161));
+        assert_eq!(mean_max.iteration_counter, 3450052);
+    }
+
+    #[test]
+    fn test_mean_max_1() {
+        let cells = [[0, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+        let board = BoardAvx2::from_array(cells).unwrap();
+
+        let mut mean_max = MeanMax::new();
+        let (move_idx, eval) = mean_max.best_move(board, 3);
+
+        assert_eq!(move_idx, 3);
+        assert_eq!(eval, Evaluation(0));
+        assert_eq!(mean_max.iteration_counter, 12051540);
     }
 }

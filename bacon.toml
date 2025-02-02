@@ -62,11 +62,12 @@ on_success = "job:asm"
 
 [jobs.nextest]
 command = [
-    "cargo", "nextest", "run", "mean_max", 
+    "cargo", "nextest", "run",
     "--hide-progress-bar", "--failure-output", "final"
 ]
 need_stdout = true
 analyzer = "nextest"
+on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
 
 [jobs.doc]
 command = ["cargo", "doc", "--no-deps"]
@@ -107,6 +108,7 @@ need_stdout = true
 allow_warnings = true
 background = false
 on_change_strategy = "kill_then_restart"
+on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
 
 # This parameterized job runs the example of your choice, as soon
 # as the code compiles.
@@ -128,3 +130,4 @@ a = "job:test-asm"
 shift-a = "job:asm"
 t = "job:nextest"
 shift-b = "job:bench"
+r = "job:run-long"
