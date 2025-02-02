@@ -7,13 +7,12 @@ enabled = true
 base_volume = "100%" # global volume multiplier
 
 [jobs.asm]
-# command = ["cargo", "asm", "--lib", "BoardAvx2::swipe_right", "--native", "--simplify", "--color"]
-command = ["cargo", "asm", "--lib", "EvaluationState::next", "--native", "--simplify", "--color"]
+command = ["cargo", "asm", "--lib", "eval", "--native", "--simplify", "--color"]
 need_stdout = true
 allow_warnings = true
 
 [jobs.bench]
-command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "initial_baseline", "--color=always"]
+command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "native", "--color=always"]
 need_stdout = true
 allow_warnings = true
 on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
@@ -63,7 +62,7 @@ on_success = "job:asm"
 
 [jobs.nextest]
 command = [
-    "cargo", "nextest", "run", 
+    "cargo", "nextest", "run", "mean_max", 
     "--hide-progress-bar", "--failure-output", "final"
 ]
 need_stdout = true
@@ -84,7 +83,7 @@ on_success = "back" # so that we don't open the browser at each change
 # if it makes sense for this crate.
 [jobs.run]
 command = [
-    "cargo", "run",
+    "cargo", "run", "--release"
     # put launch parameters for your program behind a `--` separator
 ]
 need_stdout = true
@@ -101,7 +100,7 @@ background = true
 # a binding `r = job:run-long` at the end of this file .
 [jobs.run-long]
 command = [
-    "cargo", "run",
+    "cargo", "run", "--release"
     # put launch parameters for your program behind a `--` separator
 ]
 need_stdout = true
@@ -128,4 +127,4 @@ c = "job:clippy-all" # comment this to have 'c' run clippy on only the default t
 a = "job:test-asm"
 shift-a = "job:asm"
 t = "job:nextest"
-b = "job:bench"
+shift-b = "job:bench"

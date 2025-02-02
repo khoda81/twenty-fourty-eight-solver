@@ -6,7 +6,7 @@ macro_rules! debug_println {
     ($($arg:tt)*) => {
         #[cfg(debug_assertions)]
         {
-            eprintln!($($arg)*);
+            //eprintln!($($arg)*);
         }
     };
 }
@@ -16,7 +16,7 @@ macro_rules! debug_print {
     ($($arg:tt)*) => {
         #[cfg(debug_assertions)]
         {
-            eprint!($($arg)*);
+            //eprint!($($arg)*);
         }
     };
 }
@@ -308,10 +308,10 @@ pub(crate) unsafe fn rotate_90(board: __m128i) -> __m128i {
     unsafe {
         // Shuffle mask for 90-degree clockwise rotation
         let shuffle_mask = _mm_set_epi8(
-            15, 11, 7, 3, // Last column becomes first row
-            14, 10, 6, 2, // Third column becomes second row
-            13, 9, 5, 1, // Second column becomes third row
-            12, 8, 4, 0, // First column becomes fourth row
+            3, 7, 11, 15, // Last column becomes first row
+            2, 6, 10, 14, // Third column becomes second row
+            1, 5, 9, 13, // Second column becomes third row
+            0, 4, 8, 12, // First column becomes fourth row
         );
 
         _mm_shuffle_epi8(board, shuffle_mask)

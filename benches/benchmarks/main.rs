@@ -2,7 +2,7 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use itertools::Itertools as _;
 use twenty_fourty_eight_solver::{
     board::{BoardAvx2, test_utils},
-    search::search_state::{CurrentState, EvaluationState},
+    search::search_state::{SpawnIter, Transition},
 };
 
 /// Generate a vector of random boards for benchmarking.
@@ -91,11 +91,11 @@ fn bench_spawn_until_done(c: &mut Criterion) {
     group.bench_function("spawn_until_done", |b| {
         b.iter(|| {
             for board in &simd_boards {
-                let Some(mut state) = EvaluationState::from_board(*board) else {
+                let Some(mut state) = SpawnIter::from_board(*board) else {
                     continue;
                 };
 
-                while let CurrentState::One | CurrentState::Two = state.next_spawn() {
+                while !matches!(state.next_spawn(), Transition::Done) {
                     black_box(state.current_board());
                 }
             }
@@ -127,7 +127,7 @@ fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
 
                 for _ in 0..N {
                     board = board.swipe_right().rotate_90();
-                    let Some(state) = EvaluationState::from_board(board) else {
+                    let Some(state) = SpawnIter::from_board(board) else {
                         continue;
                     };
 

@@ -51,12 +51,22 @@ impl BoardAvx2 {
     }
 
     /// Compact rows of a 2048 board using SIMD intrinsics.
+    #[inline]
     pub fn swipe_right(self) -> Self {
         // SAFETY: Board is only instantiatable on avx2 ssse3
         Self(unsafe { simd_utils::swipe_right_simd(self.0) })
     }
 
+    /// Compact rows of a 2048 board using SIMD intrinsics.
+    #[inline]
+    pub fn checked_swipe_right(self) -> Option<Self> {
+        // SAFETY: Board is only instantiatable on avx2 ssse3
+        let new_self = Self(unsafe { simd_utils::swipe_right_simd(self.0) });
+        (self != new_self).then_some(new_self)
+    }
+
     /// Rotate the board 90deg
+    #[inline]
     pub fn rotate_90(self) -> Self {
         Self(unsafe { simd_utils::rotate_90(self.0) })
     }
@@ -219,17 +229,13 @@ mod test {
 
     #[test]
     fn test_rot90() {
-        let board = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [
-            13, 14, 15, 16,
-        ]];
-        let output = [[1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15], [
-            4, 8, 12, 16,
-        ]];
+        let board = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]];
+        let output = [[12, 8, 4, 0], [13, 9, 5, 1], [14, 10, 6, 2], [15, 11, 7, 3]];
 
         let board = BoardAvx2::from_array(board).unwrap();
         let rotated = board.rotate_90();
         let output = BoardAvx2::from_array(output).unwrap();
-        assert_eq!(rotated, output);
+        assert_eq!(rotated, output, "Input: {board:?}",);
     }
 
     fn test_swipe(board: [[u8; 4]; 4]) {
