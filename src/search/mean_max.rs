@@ -4,8 +4,9 @@ use super::{
 use crate::{board::BoardAvx2, search::search_state::Transition};
 use std::arch::x86_64::__m128i;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct SearchConstraint {
+    pub board: BoardAvx2,
     pub depth: i32,
 }
 
@@ -17,8 +18,8 @@ impl SearchConstraint {
         575, 578, 580, 583, 585, 588, 590, 593, 595, 597,
     ];
 
-    pub fn new(log_prob: i32) -> Self {
-        Self { depth: log_prob }
+    pub fn new(board: BoardAvx2, depth: i32) -> Self {
+        Self { board, depth }
     }
 
     pub fn sat(&self) -> bool {
@@ -58,7 +59,6 @@ pub struct MeanMax {
     stack: Vec<u64>,
 
     /// Number of remaining recursions
-    pub search_constraint: SearchConstraint,
     pub iteration_counter: u32,
     pub heuristic_depth: u32,
 
@@ -77,14 +77,16 @@ impl MeanMax {
     pub fn new() -> Self {
         Self {
             stack: vec![],
-            search_constraint: SearchConstraint::new(0),
             cache: BoardCache::new(),
             iteration_counter: 0,
             heuristic_depth: 10,
         }
     }
 
-    pub fn best_move(&mut self, mut board: BoardAvx2) -> (Evaluation, u16) {
+    pub fn search(
+        &mut self,
+        SearchConstraint { mut board, depth }: SearchConstraint,
+    ) -> (Evaluation, u16) {
         let mut best_move = (Evaluation::MIN, 0);
         self.iteration_counter = 0;
 
@@ -95,10 +97,7 @@ impl MeanMax {
             };
 
             log::trace!("Evaluating move#{move_idx}:\n{swiped}");
-
-            let constraint = self.search_constraint.clone();
-            best_move = (self.evaluate_move(swiped), move_idx).max(best_move);
-            debug_assert_eq!(self.search_constraint, constraint);
+            best_move = (self.evaluate_move(swiped, depth), move_idx).max(best_move);
 
             board = board.rotate_90();
         }
@@ -170,14 +169,14 @@ impl MeanMax {
     }
 
     #[inline(never)]
-    fn evaluate_move(&mut self, board: BoardAvx2) -> Evaluation {
+    fn evaluate_move(&mut self, board: BoardAvx2, mut depth: i32) -> Evaluation {
         let mut state = State::EvaluateMove(board);
 
         loop {
             self.iteration_counter += 1;
-            log::trace!("State: {state:?}, constraint: {:?}", self.search_constraint);
+            log::trace!("State: {state:?}");
 
-            state = self.handle_state(state);
+            state = self.handle_state(state, &mut depth);
             if let State::UpdateMoveEval(value) = &state {
                 if self.stack.is_empty() {
                     return value.clone();
@@ -187,15 +186,15 @@ impl MeanMax {
     }
 
     #[inline(always)]
-    fn handle_state(&mut self, state: State) -> State {
+    fn handle_state(&mut self, state: State, depth: &mut i32) -> State {
         match state {
             State::EvaluateMove(board) => {
-                if let Some(eval) = self.cache.get(board, self.search_constraint.depth) {
+                if let Some(eval) = self.cache.get(board, *depth) {
                     State::UpdateMoveEval(eval.clone())
-                } else if !self.search_constraint.sat() {
+                } else if *depth < 0 {
                     State::UpdateMoveEval(self.heuristic(board))
                 } else if let Some(iter) = SpawnIter::new(board) {
-                    self.search_constraint.tighten(board.num_empty());
+                    *depth -= 1;
                     State::ExpandMoves(iter, EvaluationState::new())
                 } else {
                     unreachable!("moves that need to be evaluated will always have an empty cell")
@@ -248,10 +247,9 @@ impl MeanMax {
                     Transition::Switch => State::ExpandMoves(iter, state.switch()),
                     Transition::Done => {
                         let eval = state.evaluate();
-                        self.cache
-                            .insert(board, self.search_constraint.depth, eval.clone());
+                        self.cache.insert(board, *depth, eval.clone());
 
-                        self.search_constraint.loosen(board.num_empty());
+                        *depth += 1;
                         State::UpdateMoveEval(eval)
                     }
                 }
@@ -282,7 +280,7 @@ mod test {
 
         let mut mean_max = MeanMax::new();
         mean_max.search_constraint.set_depth(6);
-        let (eval, move_idx) = mean_max.best_move(board);
+        let (eval, move_idx) = mean_max.search(board);
 
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
@@ -299,7 +297,7 @@ mod test {
 
         let mut mean_max = MeanMax::new();
         mean_max.search_constraint.set_depth(3);
-        let (eval, move_idx) = mean_max.best_move(board);
+        let (eval, move_idx) = mean_max.search(board);
 
         assert_eq!(move_idx, 3);
         assert_eq!(eval, Evaluation(560));

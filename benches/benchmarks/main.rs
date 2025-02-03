@@ -3,7 +3,7 @@ use itertools::Itertools as _;
 use twenty_fourty_eight_solver::{
     board::{BoardAvx2, test_utils},
     search::{
-        mean_max::MeanMax,
+        mean_max::{MeanMax, SearchConstraint},
         search_state::{SpawnIter, Transition},
     },
 };
@@ -149,14 +149,14 @@ fn bench_mean_max(c: &mut Criterion) {
     let board = BoardAvx2::from_array(cells).unwrap();
 
     let mut mean_max = MeanMax::new();
-    mean_max.search_constraint.set_depth(7);
-    let (eval, move_idx) = mean_max.best_move(board);
+    let search_constraint = SearchConstraint { board, depth: 7 };
+    let (eval, move_idx) = mean_max.search(search_constraint);
 
     let mut group = c.benchmark_group("benchmark_mean_max");
     group.bench_function("Benchmark almost filled", |b| {
         b.iter(|| {
             mean_max.clear_cache();
-            mean_max.best_move(board)
+            mean_max.search(search_constraint)
         });
     });
 

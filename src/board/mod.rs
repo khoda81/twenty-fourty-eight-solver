@@ -74,6 +74,18 @@ impl BoardAvx2 {
         Self(unsafe { simd_utils::swipe_right_simd(self.0) })
     }
 
+    pub fn swipe_direction(mut self, direction: u16) -> BoardAvx2 {
+        for move_idx in 0..4 {
+            if direction == move_idx {
+                self = self.swipe_right();
+            }
+
+            self = self.rotate_90();
+        }
+
+        self
+    }
+
     /// Compact rows of a 2048 board using SIMD intrinsics.
     #[inline]
     pub fn checked_swipe_right(self) -> Option<Self> {

@@ -1,5 +1,7 @@
 use std::{arch::x86_64::*, fmt::Debug};
 
+use rand::seq::IndexedRandom as _;
+
 use crate::board::BoardAvx2;
 
 #[derive()]
@@ -99,6 +101,25 @@ impl SpawnIter {
             let mask = _mm_set1_epi8(0b10011111_u8 as i8);
             BoardAvx2(_mm_and_si128(self.0, mask))
         }
+    }
+
+    pub fn random_spawn(mut self, rng: &mut impl rand::Rng) -> BoardAvx2 {
+        let mut spawns = Vec::new();
+        let mut weight = 2;
+
+        loop {
+            for _ in 0..weight {
+                spawns.push(self.current_board());
+            }
+
+            match self.next_spawn() {
+                Transition::Done => break,
+                Transition::Switch => weight -= 1,
+                Transition::None => {}
+            }
+        }
+
+        *spawns.choose(rng).unwrap()
     }
 
     pub fn board(&self) -> BoardAvx2 {

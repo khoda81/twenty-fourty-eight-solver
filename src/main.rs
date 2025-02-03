@@ -1,11 +1,14 @@
+use std::fmt::Display;
+
 use clap::{Parser, ValueEnum};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
-use rand::seq::IndexedRandom;
+use number_prefix::NumberPrefix;
 use twenty_fourty_eight_solver::{
     board::{self, BoardAvx2},
     search::{
-        mean_max::MeanMax,
-        search_state::{SpawnIter, Transition},
+        mean_max::{MeanMax, SearchConstraint},
+        search_state::SpawnIter,
     },
 };
 
@@ -18,8 +21,8 @@ struct Args {
     #[arg(short, long)]
     depth: Option<i32>,
 
-    #[arg(short, long, default_value = "random")]
-    starting_pos: StartingPosition,
+    #[arg(short, long)]
+    board_editor: bool,
 
     #[arg(short, long)]
     /// Keep the evaluation cache instead of clearing every move
@@ -28,6 +31,9 @@ struct Args {
     #[arg(long)]
     /// Depth of search for the heuristic
     heuristic_depth: Option<u32>,
+
+    #[arg(long, default_value = "1000")]
+    num_eval_games: u64,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -35,12 +41,6 @@ enum Mode {
     Play,
     Eval,
     SingleShot,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum StartingPosition {
-    Random,
-    Manual,
 }
 
 fn main() {
@@ -51,15 +51,15 @@ fn main() {
         .parse_default_env()
         .init();
 
-    let board = match args.starting_pos {
-        StartingPosition::Random => random_spawn(BoardAvx2::new().unwrap()).unwrap(),
-        StartingPosition::Manual => interactive_board_editor(),
+    let board = if args.board_editor {
+        interactive_board_editor()
+    } else {
+        SpawnIter::new(BoardAvx2::new().unwrap())
+            .unwrap()
+            .random_spawn(&mut rand::rng())
     };
 
     let mut mean_max = MeanMax::new();
-    if let Some(depth) = args.depth {
-        mean_max.search_constraint.set_depth(depth);
-    }
 
     if let Some(heuristic_depth) = args.heuristic_depth {
         mean_max.heuristic_depth = heuristic_depth;
@@ -67,42 +67,14 @@ fn main() {
 
     match args.mode {
         Mode::Play => play(&mut mean_max, board, args),
-        Mode::Eval => evaluate_heuristic(&mut mean_max, board),
+        Mode::Eval => evaluate_heuristic(&mut mean_max, board, args),
         Mode::SingleShot => {
             info!("Evaluating:\n{board}");
 
-            let start = std::time::Instant::now();
-            let (eval, best_move) = mean_max.best_move(board);
-            let elapsed = start.elapsed();
-            info!("Best move: {best_move}, Eval: {eval}");
-
-            let iterations = mean_max.iteration_counter as f64;
-
-            if mean_max.iteration_counter > 0 {
-                let per_iteration = elapsed / mean_max.iteration_counter;
-                info!(
-                    "{iterations:.2e} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)"
-                );
-            } else {
-                info!("{iterations:.2e} iterations in {elapsed:.2?}");
-            }
-
-            let cache = mean_max.cache();
-            info!(
-                "Hit ratio: {:.3} ({}/{})",
-                cache.hit_rate(),
-                cache.hit_counter(),
-                cache.lookup_counter()
-            );
-
-            let mut board = board;
-            for move_idx in 0..4 {
-                if best_move == move_idx {
-                    board = board.swipe_right();
-                }
-
-                board = board.rotate_90();
-            }
+            let best_move = search_best_move(&mut mean_max, SearchConstraint { board, depth: 7 });
+            info!("Selected: {best_move}");
+            let board = board.swipe_direction(best_move);
+            info!("Board:\n{board}");
 
             if board.num_empty() == 0 {
                 info!("Game over!\n{board}");
@@ -111,118 +83,116 @@ fn main() {
     }
 }
 
-fn play(mean_max: &mut MeanMax, mut board: BoardAvx2, args: Args) {
-    loop {
-        info!("Evaluating:\n{board}");
+fn play(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
+    let mut constraint = SearchConstraint { board, depth: 3 };
 
-        let start = std::time::Instant::now();
+    if let Some(depth) = args.depth {
+        constraint.set_depth(depth);
+    }
+
+    loop {
         if !args.persistent_cache {
             mean_max.clear_cache();
         }
 
-        let (eval, best_move) = mean_max.best_move(board);
-        let elapsed = start.elapsed();
-        info!("Best move: {best_move}, Eval: {eval}");
+        let best_move = search_best_move(mean_max, constraint);
 
-        let iterations = mean_max.iteration_counter as f64;
-
-        if mean_max.iteration_counter > 0 {
-            let per_iteration = elapsed / mean_max.iteration_counter;
-            info!("{iterations:.2e} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)");
-        } else {
-            info!("{iterations:.2e} iterations in {elapsed:.2?}");
-        }
-
-        let cache = mean_max.cache();
-        info!(
-            "Hit ratio: {:.3} ({}/{})",
-            cache.hit_rate(),
-            cache.hit_counter(),
-            cache.lookup_counter()
-        );
-
-        for move_idx in 0..4 {
-            if best_move == move_idx {
-                board = board.swipe_right();
-            }
-
-            board = board.rotate_90();
-        }
-
-        let Some(new_board) = random_spawn(board) else {
-            break;
-        };
-
-        board = new_board;
+        let spawn_iter = SpawnIter::new(constraint.board.swipe_direction(best_move));
+        let Some(spawn_iter) = spawn_iter else { break };
+        constraint.board = spawn_iter.random_spawn(&mut rand::rng());
     }
 
     info!("Game over!\n{board}");
 }
 
-fn random_spawn(board: BoardAvx2) -> Option<BoardAvx2> {
-    let mut spawns = vec![];
-    let mut spawner = SpawnIter::new(board)?;
-    let mut weight = 2;
-
-    loop {
-        for _ in 0..weight {
-            spawns.push(spawner.current_board());
-        }
-
-        match spawner.next_spawn() {
-            Transition::Done => break spawns.choose(&mut rand::rng()).copied(),
-            Transition::Switch => weight -= 1,
-            Transition::None => {}
+struct Count(f64);
+impl Display for Count {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match NumberPrefix::decimal(self.0) {
+            NumberPrefix::Standalone(val) => val.fmt(f),
+            NumberPrefix::Prefixed(prefix, val) => {
+                val.fmt(f)?;
+                prefix.fmt(f)
+            }
         }
     }
 }
 
-pub fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2) {
-    let n_games = 1000; // TODO: make this a commandline arg
+fn search_best_move(mean_max: &mut MeanMax, search_constraint: SearchConstraint) -> u16 {
+    info!("Evaluating:\n{}", search_constraint.board);
 
-    log::info!("Evaluating heuristic!");
-    let mut running_total = 0;
+    let start = std::time::Instant::now();
 
-    let total: u32 = (1..n_games + 1)
-        .map(|i| {
-            let score = run_game(mean_max, board);
-            running_total += score;
+    let (eval, best_move) = mean_max.search(search_constraint);
+    let elapsed = start.elapsed();
+    info!("Best move: {best_move}, Eval: {eval}");
 
-            log::info!(
-                "Game {i}/{n_games}: {score} (avg: {:.2})",
-                running_total as f64 / i as f64
-            );
+    let iterations = mean_max.iteration_counter as f64;
 
-            score
-        })
-        .sum();
+    if mean_max.iteration_counter > 0 {
+        let per_iteration = elapsed / mean_max.iteration_counter;
+        info!(
+            "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
+            Count(iterations)
+        );
+    } else {
+        info!("{:.0} iterations in {elapsed:.2?}", Count(iterations));
+    }
 
-    let eval = total as f64 / n_games as f64;
-    log::info!("Avg: {eval} ({total}/{n_games})");
+    let cache = mean_max.cache();
+    info!(
+        "Hit rate: {:.3} ({:.0}/{:.0})",
+        cache.hit_rate(),
+        Count(cache.hit_counter() as f64),
+        Count(cache.lookup_counter() as f64),
+    );
+
+    best_move
 }
 
-fn run_game(mean_max: &mut MeanMax, mut board: BoardAvx2) -> u32 {
+fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
+    log::info!("Evaluating heuristic!");
+    let mut constraint = SearchConstraint { board, depth: 0 };
+
+    if let Some(depth) = args.depth {
+        constraint.set_depth(depth);
+    }
+
+    let style =
+        ProgressStyle::with_template("{pos}/{len} Games [{wide_bar:^.cyan/blue}] Eta: {eta} {msg}")
+            .unwrap()
+            .progress_chars("=> ");
+
+    let pb = ProgressBar::new(args.num_eval_games).with_style(style);
+    let mut total = 0;
+
+    for i in 1..args.num_eval_games + 1 {
+        let score = run_game(mean_max, constraint);
+        total += score;
+
+        let message = format!("Avg: {:6.2}", total as f64 / i as f64);
+
+        pb.set_message(message);
+        pb.inc(1);
+    }
+
+    pb.finish();
+    let eval = total as f64 / args.num_eval_games as f64;
+    log::info!("Avg: {eval}");
+}
+
+fn run_game(mean_max: &mut MeanMax, mut constraint: SearchConstraint) -> u32 {
     let mut score = 0;
 
     loop {
         mean_max.clear_cache();
 
-        let (_, best_move) = mean_max.best_move(board);
+        let (_, best_move) = mean_max.search(constraint);
 
-        for move_idx in 0..4 {
-            if best_move == move_idx {
-                board = board.swipe_right();
-            }
-
-            board = board.rotate_90();
-        }
-
-        let Some(new_board) = random_spawn(board) else {
-            break;
-        };
-
+        let spawn_iter = SpawnIter::new(constraint.board.swipe_direction(best_move));
+        let Some(spawn_iter) = spawn_iter else { break };
+        constraint.board = spawn_iter.random_spawn(&mut rand::rng());
         score += 1;
-        board = new_board;
     }
 
     score
@@ -233,7 +203,9 @@ fn interactive_board_editor() -> BoardAvx2 {
 
     let board = BoardAvx2::from_array(board_values).unwrap();
     if board == BoardAvx2::new().unwrap() {
-        random_spawn(board).unwrap()
+        SpawnIter::new(board)
+            .unwrap()
+            .random_spawn(&mut rand::rng())
     } else {
         board
     }
