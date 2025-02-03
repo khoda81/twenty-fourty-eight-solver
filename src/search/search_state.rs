@@ -1,8 +1,8 @@
-use std::{arch::x86_64::*, i16};
+use std::{arch::x86_64::*, fmt::Debug};
 
 use crate::board::BoardAvx2;
 
-#[derive(Debug)]
+#[derive()]
 pub struct SpawnIter(pub(crate) __m128i);
 
 #[derive(Debug)]
@@ -43,7 +43,12 @@ impl SpawnIter {
 
         let Self(mut inner) = *self;
 
-        let shifted = unsafe { _mm_slli_epi16::<1>(inner) };
+        let shifted = unsafe {
+            let msb_mask = _mm_set1_epi8(0b0111_1111_u8 as i8);
+            let no_msb = _mm_and_si128(inner, msb_mask);
+            _mm_slli_epi16::<1>(no_msb)
+        };
+
         let msb = unsafe { _mm_movemask_epi8(inner) as u16 };
         crate::debug_println!("msb:   {msb:016b}");
         let state = unsafe { _mm_movemask_epi8(shifted) as u16 };
@@ -52,9 +57,19 @@ impl SpawnIter {
 
         let mut filled_mask = msb | state.wrapping_sub(1);
         if filled_mask == u16::MAX {
+            unsafe {
+                crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
+                crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
+            }
+
             // Create a mask to extract the shifted value at previous_spawn position
             inner = unsafe { _mm_blendv_epi8(inner, shifted, shifted) };
-            filled_mask = msb;
+            unsafe {
+                crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
+                crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
+            }
+
+            filled_mask = msb ^ state;
             result = Transition::Switch;
         }
 
@@ -65,6 +80,7 @@ impl SpawnIter {
             let mut cells: [u8; 16] = tb(inner);
             cells.swap_unchecked(next_spawn_idx, previous_spawn);
 
+            crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
             self.0 = _mm_loadu_si128(cells.as_ptr().cast());
 
             let state_mask = _mm_set1_epi8(0b01000000);
@@ -97,6 +113,19 @@ impl SpawnIter {
 
     pub fn into_inner(self) -> __m128i {
         self.0
+    }
+}
+
+impl Debug for SpawnIter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple(
+            std::any::type_name::<SpawnIter>()
+                .split("::")
+                .last()
+                .unwrap_or("SpawnIter"),
+        )
+        .field(&BoardAvx2(self.0))
+        .finish()
     }
 }
 
@@ -263,6 +292,66 @@ mod test {
         assert_matches!(search_state, None);
     }
 
+    #[test]
+    fn test_last_empty() {
+        let board = [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 0]];
+        let board = crate::board::BoardAvx2::from_array(board).unwrap();
+        let mut search_state = SpawnIter::new(board).unwrap();
+
+        assert_eq!(search_state.board(), board);
+        assert_eq!(search_state.current_board().to_array(), [
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1]
+        ]);
+
+        assert_matches!(search_state.next_spawn(), Transition::Switch);
+        assert_eq!(search_state.board(), board);
+        assert_eq!(search_state.current_board().to_array(), [
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 2]
+        ]);
+
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+    }
+
+    #[test]
+    fn test_one_empty() {
+        let board = [[1, 1, 1, 1], [1, 1, 0, 1], [1, 1, 1, 1], [1, 1, 1, 1]];
+        let board = crate::board::BoardAvx2::from_array(board).unwrap();
+        let mut search_state = SpawnIter::new(board).unwrap();
+        eprintln!("{search_state:?}, {board:?}");
+
+        assert_eq!(search_state.board(), board, "spawner: {search_state:?}");
+        assert_eq!(search_state.current_board().to_array(), [
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1]
+        ]);
+        eprintln!("Before next:{search_state:?}, {board:?}");
+
+        assert_matches!(search_state.next_spawn(), Transition::Switch);
+        eprintln!("After next: {search_state:?}, {board:?}");
+
+        assert_eq!(search_state.board(), board, "spawner: {search_state:?}");
+
+        assert_eq!(search_state.current_board().to_array(), [
+            [1, 1, 1, 1],
+            [1, 1, 2, 1],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1]
+        ]);
+
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+        assert_matches!(search_state.next_spawn(), Transition::Done);
+    }
     #[test]
     fn test_empty() {
         let board = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];

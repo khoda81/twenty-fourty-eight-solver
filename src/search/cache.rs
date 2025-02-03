@@ -1,12 +1,10 @@
-use std::collections::{HashMap, hash_map::Entry};
-
-use crate::board::BoardAvx2;
-
 use super::search_state::Evaluation;
+use crate::board::BoardAvx2;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 struct CacheEntry {
-    depth: u32,
+    depth: i32,
     eval: Evaluation,
 }
 
@@ -25,7 +23,7 @@ impl EvaluationCache {
         }
     }
 
-    pub fn get(&mut self, board: BoardAvx2, depth: u32) -> Option<Evaluation> {
+    pub fn get(&mut self, board: BoardAvx2, depth: i32) -> Option<Evaluation> {
         self.lookup_counter += 1;
 
         match self.cache.get(&board.into_u128()) {
@@ -37,7 +35,7 @@ impl EvaluationCache {
         }
     }
 
-    pub fn insert(&mut self, board: BoardAvx2, depth: u32, eval: Evaluation) {
+    pub fn insert(&mut self, board: BoardAvx2, depth: i32, eval: Evaluation) {
         let cache_entry = CacheEntry { depth, eval };
 
         self.cache
@@ -60,6 +58,12 @@ impl EvaluationCache {
 
     pub fn lookup_counter(&self) -> u32 {
         self.lookup_counter
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.cache.clear();
+        self.hit_counter = 0;
+        self.lookup_counter = 0;
     }
 }
 

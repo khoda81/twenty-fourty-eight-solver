@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [profile.release]
-lto = true
+lto = false
 opt-level = 3
 
 [[bench]]
@@ -13,7 +13,9 @@ harness = false
 
 [dependencies]
 anyhow = "1.0"
+env_logger = "0.11.6"
 itertools = "0.14"
+log = "0.4.25"
 rand = "0.9"
 thiserror = "2.0.11"
 

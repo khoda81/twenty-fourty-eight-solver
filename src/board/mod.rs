@@ -19,6 +19,22 @@ impl BoardAvx2 {
     ///
     /// # Errors
     /// Returns a `MissingCpuFeatures` error if the CPU does not support the required AVX2 and SSSE3 features.
+    pub fn new() -> Result<Self, MissingCpuFeatures> {
+        if cfg!(target_arch = "x86_64")
+            && is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("ssse3")
+        {
+            // Safety: We've verified the platform supports AVX2 and SSSE3.
+            Ok(unsafe { Self::from_array_unchecked([[0; 4]; 4]) })
+        } else {
+            Err(MissingCpuFeatures)
+        }
+    }
+
+    /// Safely creates a `Board` from a 2D array.
+    ///
+    /// # Errors
+    /// Returns a `MissingCpuFeatures` error if the CPU does not support the required AVX2 and SSSE3 features.
     pub fn from_array(cells: [[u8; 4]; 4]) -> Result<Self, MissingCpuFeatures> {
         if cfg!(target_arch = "x86_64")
             && is_x86_feature_detected!("avx2")
@@ -110,17 +126,70 @@ impl Ord for BoardAvx2 {
     }
 }
 
+fn format_row<'a>(
+    f: &mut fmt::Formatter<'_>,
+    row: impl IntoIterator<Item = &'a u8>,
+) -> Result<(), fmt::Error> {
+    let mut row = row.into_iter();
+
+    if let Some(c) = row.next() {
+        write!(f, "{c:02x}")?;
+    }
+
+    row.try_for_each(|c| write!(f, " {c:02x}"))
+}
+
 impl fmt::Debug for BoardAvx2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut rows = self.to_array().into_iter();
 
         if let Some(row) = rows.next() {
-            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
+            format_row(f, &row)?;
+        }
+
+        for row in rows {
+            f.write_str(" | ")?;
+            format_row(f, &row)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn format_row_display<'a>(
+    f: &mut fmt::Formatter<'_>,
+    row: impl IntoIterator<Item = &'a u8>,
+) -> Result<(), fmt::Error> {
+    let mut row = row.into_iter();
+
+    if let Some(c) = row.next() {
+        if *c == 0 {
+            f.write_str(" .")?
+        } else {
+            write!(f, "{c:2x}")?
+        }
+    }
+
+    row.try_for_each(|c| {
+        if *c == 0 {
+            f.write_str(" .")
+        } else {
+            write!(f, "{c:2x}")
+        }
+    })
+}
+
+impl fmt::Display for BoardAvx2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut rows = self.to_array().into_iter();
+
+        if let Some(row) = rows.next() {
+            format_row_display(f, &row)?
         }
 
         for row in rows {
             f.write_char('\n')?;
-            row.iter().try_for_each(|c| write!(f, "{c:2x}"))?
+            format_row_display(f, &row)?
         }
 
         Ok(())

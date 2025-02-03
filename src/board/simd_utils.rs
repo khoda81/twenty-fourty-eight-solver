@@ -6,7 +6,7 @@ macro_rules! debug_println {
     ($($arg:tt)*) => {
         #[cfg(debug_assertions)]
         {
-            //eprintln!($($arg)*);
+            eprintln!($($arg)*);
         }
     };
 }
@@ -16,7 +16,7 @@ macro_rules! debug_print {
     ($($arg:tt)*) => {
         #[cfg(debug_assertions)]
         {
-            //eprint!($($arg)*);
+            eprint!($($arg)*);
         }
     };
 }

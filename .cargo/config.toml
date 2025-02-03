@@ -1,6 +1,4 @@
 [build]
 rustflags = [
-    "-Ctarget-cpu=native", 
-    # "-Cprofile-generate=.tmp/pgo-data", 
-    "-Cprofile-use=C:\\Users\\20mah\\twenty-fourty-eight-solver\\merged.profdata",
+    "-Ctarget-cpu=native",
 ]
