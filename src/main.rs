@@ -15,17 +15,26 @@ struct Args {
     #[arg(value_enum, default_value = "play")]
     mode: Mode,
 
-    #[arg(short, long, default_value_t = 3)]
-    depth: i32,
+    #[arg(short, long)]
+    depth: Option<i32>,
 
     #[arg(short, long, default_value = "random")]
     starting_pos: StartingPosition,
+
+    #[arg(short, long)]
+    /// Keep the evaluation cache instead of clearing every move
+    persistent_cache: bool,
+
+    #[arg(long)]
+    /// Depth of search for the heuristic
+    heuristic_depth: Option<u32>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum Mode {
     Play,
     Eval,
+    SingleShot,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -39,6 +48,7 @@ fn main() {
 
     env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
+        .parse_default_env()
         .init();
 
     let board = match args.starting_pos {
@@ -47,31 +57,81 @@ fn main() {
     };
 
     let mut mean_max = MeanMax::new();
-    mean_max.search_constraint.set_depth(args.depth);
+    if let Some(depth) = args.depth {
+        mean_max.search_constraint.set_depth(depth);
+    }
+
+    if let Some(heuristic_depth) = args.heuristic_depth {
+        mean_max.heuristic_depth = heuristic_depth;
+    }
 
     match args.mode {
-        Mode::Play => play(&mut mean_max, board),
+        Mode::Play => play(&mut mean_max, board, args),
         Mode::Eval => evaluate_heuristic(&mut mean_max, board),
+        Mode::SingleShot => {
+            info!("Evaluating:\n{board}");
+
+            let start = std::time::Instant::now();
+            let (eval, best_move) = mean_max.best_move(board);
+            let elapsed = start.elapsed();
+            info!("Best move: {best_move}, Eval: {eval}");
+
+            let iterations = mean_max.iteration_counter as f64;
+
+            if mean_max.iteration_counter > 0 {
+                let per_iteration = elapsed / mean_max.iteration_counter;
+                info!(
+                    "{iterations:.2e} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)"
+                );
+            } else {
+                info!("{iterations:.2e} iterations in {elapsed:.2?}");
+            }
+
+            let cache = mean_max.cache();
+            info!(
+                "Hit ratio: {:.3} ({}/{})",
+                cache.hit_rate(),
+                cache.hit_counter(),
+                cache.lookup_counter()
+            );
+
+            let mut board = board;
+            for move_idx in 0..4 {
+                if best_move == move_idx {
+                    board = board.swipe_right();
+                }
+
+                board = board.rotate_90();
+            }
+
+            if board.num_empty() == 0 {
+                info!("Game over!\n{board}");
+            }
+        }
     }
 }
 
-pub fn play(mean_max: &mut MeanMax, mut board: BoardAvx2) {
+fn play(mean_max: &mut MeanMax, mut board: BoardAvx2, args: Args) {
     loop {
         info!("Evaluating:\n{board}");
 
         let start = std::time::Instant::now();
-        mean_max.clear_cache();
+        if !args.persistent_cache {
+            mean_max.clear_cache();
+        }
 
         let (eval, best_move) = mean_max.best_move(board);
         let elapsed = start.elapsed();
         info!("Best move: {best_move}, Eval: {eval}");
 
-        info!("Iterations: {}", mean_max.iteration_counter);
-        info!(
-            "In {:?} ({:?} per iteration)",
-            elapsed,
-            elapsed / mean_max.iteration_counter
-        );
+        let iterations = mean_max.iteration_counter as f64;
+
+        if mean_max.iteration_counter > 0 {
+            let per_iteration = elapsed / mean_max.iteration_counter;
+            info!("{iterations:.2e} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)");
+        } else {
+            info!("{iterations:.2e} iterations in {elapsed:.2?}");
+        }
 
         let cache = mean_max.cache();
         info!(
@@ -118,12 +178,21 @@ fn random_spawn(board: BoardAvx2) -> Option<BoardAvx2> {
 }
 
 pub fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2) {
-    let n_games = 1000;
+    let n_games = 1000; // TODO: make this a commandline arg
 
-    let total: u32 = (0..n_games)
+    log::info!("Evaluating heuristic!");
+    let mut running_total = 0;
+
+    let total: u32 = (1..n_games + 1)
         .map(|i| {
             let score = run_game(mean_max, board);
-            log::debug!("Game {i}/{n_games}: {score}");
+            running_total += score;
+
+            log::info!(
+                "Game {i}/{n_games}: {score} (avg: {:.2})",
+                running_total as f64 / i as f64
+            );
+
             score
         })
         .sum();
@@ -160,7 +229,6 @@ fn run_game(mean_max: &mut MeanMax, mut board: BoardAvx2) -> u32 {
 }
 
 fn interactive_board_editor() -> BoardAvx2 {
-    println!("Enter the board as a 4x4 grid (use space-separated values, 0 for empty):");
     let board_values = board::editor::grid_editor().unwrap();
 
     let board = BoardAvx2::from_array(board_values).unwrap();

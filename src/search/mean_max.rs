@@ -60,6 +60,7 @@ pub struct MeanMax {
     /// Number of remaining recursions
     pub search_constraint: SearchConstraint,
     pub iteration_counter: u32,
+    pub heuristic_depth: u32,
 
     cache: BoardCache<Evaluation>,
 }
@@ -79,11 +80,13 @@ impl MeanMax {
             search_constraint: SearchConstraint::new(0),
             cache: BoardCache::new(),
             iteration_counter: 0,
+            heuristic_depth: 10,
         }
     }
 
     pub fn best_move(&mut self, mut board: BoardAvx2) -> (Evaluation, u16) {
         let mut best_move = (Evaluation::MIN, 0);
+        self.iteration_counter = 0;
 
         for move_idx in 0..4 {
             let Some(swiped) = board.checked_swipe_right() else {
@@ -130,37 +133,36 @@ impl MeanMax {
     fn heuristic(&self, mut board: BoardAvx2) -> Evaluation {
         let mut eval = 0;
 
-        //const N: i16 = 8;
-        //for _ in 0..N {
-        //    let Some(state) = SpawnIter::new(board) else {
-        //        break;
-        //    };
-        //
-        //    match state.current_board().rotate_90().checked_swipe_right() {
-        //        Some(b) => board = b,
-        //        None => break,
-        //    };
-        //
-        //    eval += 10;
-        //
-        //    //board = state.current_board();
-        //    //for _ in 0..4 {
-        //    //    if let Some(new_board) = board.checked_swipe_right() {
-        //    //        eval += 10;
-        //    //        board = new_board;
-        //    //        continue 'outer;
-        //    //    };
-        //    //
-        //    //    board = board.rotate_90();
-        //    //}
-        //    //
-        //    //break;
-        //}
+        for _ in 0..self.heuristic_depth {
+            let Some(state) = SpawnIter::new(board) else {
+                break;
+            };
+
+            match state.current_board().rotate_90().checked_swipe_right() {
+                Some(b) => board = b,
+                None => break,
+            };
+
+            eval += 7;
+
+            //board = state.current_board();
+            //for _ in 0..4 {
+            //    if let Some(new_board) = board.checked_swipe_right() {
+            //        eval += 10;
+            //        board = new_board;
+            //        continue 'outer;
+            //    };
+            //
+            //    board = board.rotate_90();
+            //}
+            //
+            //break;
+        }
 
         let num_empty = board.num_empty() as i16;
 
-        eval += 1 << num_empty.min(5);
-        eval *= 5;
+        eval += 1 << num_empty.min(4);
+        eval *= 1;
         //let b = 8 * num_empty;
 
         //Evaluation(a + b)
@@ -211,7 +213,7 @@ impl MeanMax {
                 eval_state.reset_moves();
                 let mut filtered_boards = [rot0, rot1, rot2, rot3]
                     .into_iter()
-                    .filter_map(BoardAvx2::checked_swipe_right)
+                    .filter_map(|b| b.checked_swipe_right())
                     .inspect(|_| eval_state.add_move());
 
                 if let Some(next_board) = filtered_boards.next() {
@@ -245,38 +247,16 @@ impl MeanMax {
                     Transition::None => State::ExpandMoves(iter, state),
                     Transition::Switch => State::ExpandMoves(iter, state.switch()),
                     Transition::Done => {
-                        self.search_constraint.loosen(board.num_empty());
                         let eval = state.evaluate();
                         self.cache
                             .insert(board, self.search_constraint.depth, eval.clone());
 
+                        self.search_constraint.loosen(board.num_empty());
                         State::UpdateMoveEval(eval)
                     }
                 }
             }
         }
-    }
-
-    fn expand_rotations(&mut self, iter: SpawnIter, mut eval_state: EvaluationState) -> State {
-        let rot0 = iter.current_board();
-        let rot1 = rot0.rotate_90();
-        let rot2 = rot1.rotate_90();
-        let rot3 = rot2.rotate_90();
-
-        self.push_xmm(iter.into_inner());
-
-        eval_state.reset_moves();
-        eval_state.add_move();
-        eval_state.add_move();
-        eval_state.add_move();
-        eval_state.add_move();
-
-        self.push_xmm(rot1.into_inner());
-        self.push_xmm(rot2.into_inner());
-        self.push_xmm(rot3.into_inner());
-        self.push_state(eval_state);
-
-        State::EvaluateMove(rot0)
     }
 
     pub fn cache(&self) -> &BoardCache<Evaluation> {

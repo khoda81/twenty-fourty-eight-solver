@@ -1,3 +1,4 @@
+use clipboard::ClipboardProvider;
 use crossterm::{
     QueueableCommand,
     cursor::{Hide, MoveTo, Show},
@@ -17,6 +18,33 @@ pub fn grid_editor() -> io::Result<[[u8; 4]; 4]> {
     execute!(stdout, EnterAlternateScreen, Hide)?;
 
     let mut grid = [0u8; 16];
+
+    // Attempt to read from clipboard
+    if let Ok(mut ctx) = clipboard::ClipboardContext::new() {
+        if let Ok(content) = ctx.get_contents() {
+            let mut index = 0;
+            for c in content.chars() {
+                if index >= 16 {
+                    break;
+                }
+
+                if c.is_whitespace() {
+                    continue;
+                }
+
+                grid[index] = match c {
+                    '.' => 0,
+                    '0'..='9' => c.to_digit(10).unwrap() as u8,
+                    'a'..='i' => 10 + (c as u8 - b'a'),
+                    'A'..='I' => 10 + (c.to_ascii_lowercase() as u8 - b'a'),
+                    _ => continue,
+                };
+
+                index += 1;
+            }
+        }
+    }
+
     let mut cursor = 0;
 
     loop {
@@ -34,7 +62,7 @@ pub fn grid_editor() -> io::Result<[[u8; 4]; 4]> {
                 let color = get_color(val);
 
                 if idx == cursor {
-                    stdout.queue(SetBackgroundColor(Color::Grey))?;
+                    stdout.queue(SetBackgroundColor(Color::DarkGrey))?;
                 } else {
                     stdout.queue(SetBackgroundColor(Color::Reset))?;
                 }
@@ -61,24 +89,19 @@ pub fn grid_editor() -> io::Result<[[u8; 4]; 4]> {
         }) = event
         {
             match code {
-                KeyCode::Enter => break,
-                KeyCode::Char(c) => match c {
-                    '+' => grid[cursor] = (grid[cursor] + 1).min(18),
-                    '-' => grid[cursor] = grid[cursor].saturating_sub(1),
-                    'q' => break,
+                KeyCode::Enter | KeyCode::Char('q') => break,
+                KeyCode::Char('+' | '=') => grid[cursor] = (grid[cursor] + 1).min(18),
+                KeyCode::Char('-') => grid[cursor] = grid[cursor].saturating_sub(1),
+                KeyCode::Char(c) => {
+                    grid[cursor] = match c {
+                        '.' => 0,
+                        '0'..='9' => c.to_digit(10).map(|n| n as u8).unwrap_or(grid[cursor]),
+                        'a'..='i' => 10 + (c.to_ascii_lowercase() as u8 - b'a'),
+                        _ => continue,
+                    };
 
-                    '0'..='9' => {
-                        grid[cursor] = c.to_digit(10).map(|n| n as u8).unwrap_or(grid[cursor]);
-                        cursor += 1;
-                    }
-
-                    'a'..='i' => {
-                        grid[cursor] = 10 + (c.to_ascii_lowercase() as u8 - b'a');
-                        cursor += 1;
-                    }
-
-                    _ => {}
-                },
+                    cursor += 1;
+                }
                 KeyCode::Up => cursor = cursor.wrapping_sub(4),
                 KeyCode::Down => cursor = cursor.wrapping_add(4),
                 KeyCode::Left => cursor = cursor.wrapping_sub(1),

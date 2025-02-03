@@ -131,8 +131,12 @@ fn val_to_char(v: u8) -> char {
     match v {
         0 => '.',
         1..=9 => (b'0' + v) as char,
-        10..18 => (b'a' + (v - 10)) as char,
-        _ => unreachable!(),
+        a if a & 0b01100000 != 0 => match a & 0b1111 {
+            1 => 'o',
+            2 => 't',
+            a => (a + b'A') as char,
+        },
+        a => (a - 10 + b'a') as char,
     }
 }
 
