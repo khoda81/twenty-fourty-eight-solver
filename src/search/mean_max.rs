@@ -1,9 +1,8 @@
 use super::{
-    cache::EvaluationCache,
-    search_state::{Evaluation, EvaluationState, SpawnIter},
+    cache::BoardCache, modname::Evaluation, modname::EvaluationState, search_state::SpawnIter,
 };
 use crate::{board::BoardAvx2, search::search_state::Transition};
-use std::{arch::x86_64::__m128i, ops::ControlFlow};
+use std::arch::x86_64::__m128i;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SearchConstraint {
@@ -11,7 +10,7 @@ pub struct SearchConstraint {
 }
 
 impl SearchConstraint {
-    const LOGS: [i32; 64] = [
+    pub const LOGS: [i32; 64] = [
         -100, 0, 100, 158, 200, 232, 258, 280, 300, 316, 332, 345, 358, 370, 380, 390, 400, 408,
         416, 424, 432, 439, 445, 452, 458, 464, 470, 475, 480, 485, 490, 495, 500, 504, 508, 512,
         516, 520, 524, 528, 532, 535, 539, 542, 545, 549, 552, 555, 558, 561, 564, 567, 570, 572,
@@ -26,7 +25,7 @@ impl SearchConstraint {
         self.depth >= 0
     }
 
-    pub fn tighten(&mut self, mut factor: u32) {
+    pub fn tighten(&mut self, factor: u32) {
         debug_assert!(factor > 0);
 
         //while factor >= 64 {
@@ -38,7 +37,7 @@ impl SearchConstraint {
         self.depth -= 1;
     }
 
-    pub fn loosen(&mut self, mut factor: u32) {
+    pub fn loosen(&mut self, factor: u32) {
         debug_assert!(factor > 0);
 
         //while factor >= 64 {
@@ -62,7 +61,7 @@ pub struct MeanMax {
     pub search_constraint: SearchConstraint,
     pub iteration_counter: u32,
 
-    cache: EvaluationCache,
+    cache: BoardCache<Evaluation>,
 }
 
 #[derive(Debug)]
@@ -71,7 +70,6 @@ enum State {
     ExpandMoves(SpawnIter, EvaluationState),
     UpdateMoveEval(Evaluation),
     NextSpawn(EvaluationState),
-    Return(Evaluation),
 }
 
 impl MeanMax {
@@ -79,14 +77,13 @@ impl MeanMax {
         Self {
             stack: vec![],
             search_constraint: SearchConstraint::new(0),
-            cache: EvaluationCache::new(),
+            cache: BoardCache::new(),
             iteration_counter: 0,
         }
     }
 
-    pub fn best_move(&mut self, mut board: BoardAvx2) -> (u16, Evaluation) {
-        let mut best_move = 0;
-        let mut best_eval = Evaluation::MIN;
+    pub fn best_move(&mut self, mut board: BoardAvx2) -> (Evaluation, u16) {
+        let mut best_move = (Evaluation::MIN, 0);
 
         for move_idx in 0..4 {
             let Some(swiped) = board.checked_swipe_right() else {
@@ -95,19 +92,15 @@ impl MeanMax {
             };
 
             log::trace!("Evaluating move#{move_idx}:\n{swiped}");
-            let constraint = self.search_constraint.clone();
-            let swipe_eval = self.evaluate_move(swiped);
-            debug_assert_eq!(self.search_constraint, constraint);
 
-            if swipe_eval >= best_eval {
-                best_move = move_idx;
-                best_eval = swipe_eval;
-            }
+            let constraint = self.search_constraint.clone();
+            best_move = (self.evaluate_move(swiped), move_idx).max(best_move);
+            debug_assert_eq!(self.search_constraint, constraint);
 
             board = board.rotate_90();
         }
 
-        (best_move, best_eval)
+        best_move
     }
 
     pub fn clear_cache(&mut self) {
@@ -135,41 +128,43 @@ impl MeanMax {
     }
 
     fn heuristic(&self, mut board: BoardAvx2) -> Evaluation {
-        const N: i16 = 8;
         let mut eval = 0;
-        'outer: for _ in 0..N {
-            let Some(state) = SpawnIter::new(board) else {
-                break;
-            };
 
-            match state.current_board().rotate_90().checked_swipe_right() {
-                Some(b) => board = b,
-                None => break,
-            };
-
-            eval += 10;
-
-            //board = state.current_board();
-            //for _ in 0..4 {
-            //    if let Some(new_board) = board.checked_swipe_right() {
-            //        eval += 10;
-            //        board = new_board;
-            //        continue 'outer;
-            //    };
-            //
-            //    board = board.rotate_90();
-            //}
-            //
-            //break;
-        }
+        //const N: i16 = 8;
+        //for _ in 0..N {
+        //    let Some(state) = SpawnIter::new(board) else {
+        //        break;
+        //    };
+        //
+        //    match state.current_board().rotate_90().checked_swipe_right() {
+        //        Some(b) => board = b,
+        //        None => break,
+        //    };
+        //
+        //    eval += 10;
+        //
+        //    //board = state.current_board();
+        //    //for _ in 0..4 {
+        //    //    if let Some(new_board) = board.checked_swipe_right() {
+        //    //        eval += 10;
+        //    //        board = new_board;
+        //    //        continue 'outer;
+        //    //    };
+        //    //
+        //    //    board = board.rotate_90();
+        //    //}
+        //    //
+        //    //break;
+        //}
 
         let num_empty = board.num_empty() as i16;
 
-        let a = 1 << num_empty.min(5);
+        eval += 1 << num_empty.min(5);
+        eval *= 5;
         //let b = 8 * num_empty;
 
         //Evaluation(a + b)
-        Evaluation(10 * (eval + a))
+        Evaluation(eval)
     }
 
     #[inline(never)]
@@ -181,8 +176,10 @@ impl MeanMax {
             log::trace!("State: {state:?}, constraint: {:?}", self.search_constraint);
 
             state = self.handle_state(state);
-            if let State::Return(value) = state {
-                return value;
+            if let State::UpdateMoveEval(value) = &state {
+                if self.stack.is_empty() {
+                    return value.clone();
+                }
             }
         }
     }
@@ -199,7 +196,7 @@ impl MeanMax {
                     self.search_constraint.tighten(board.num_empty());
                     State::ExpandMoves(iter, EvaluationState::new())
                 } else {
-                    unreachable!()
+                    unreachable!("moves that need to be evaluated will always have an empty cell")
                 }
             }
 
@@ -213,34 +210,31 @@ impl MeanMax {
 
                 eval_state.reset_moves();
                 let mut filtered_boards = [rot0, rot1, rot2, rot3]
-                    .map(BoardAvx2::checked_swipe_right)
                     .into_iter()
-                    .flatten()
+                    .filter_map(BoardAvx2::checked_swipe_right)
                     .inspect(|_| eval_state.add_move());
 
                 if let Some(next_board) = filtered_boards.next() {
                     filtered_boards.for_each(|b| self.push_xmm(b.into_inner()));
                     self.push_state(eval_state);
-                    return State::EvaluateMove(next_board);
+                    State::EvaluateMove(next_board)
+                } else {
+                    State::NextSpawn(eval_state.push_spawn_eval(Evaluation::TERM))
                 }
-
-                State::NextSpawn(eval_state.push_spawn_eval(Evaluation::TERM))
             }
 
             State::UpdateMoveEval(eval) => {
                 // Reached root
-                let Some(mut state) = self.stack.pop().map(EvaluationState::from) else {
-                    return State::Return(eval);
-                };
+                let mut eval_state = self.stack.pop().map(EvaluationState::from).unwrap();
 
-                if state.push_move_eval(eval) {
+                if eval_state.push_move_eval(eval) {
                     // This was the last move, spawn
-                    return State::NextSpawn(state);
+                    return State::NextSpawn(eval_state);
                 }
 
                 // Evaluate next move
                 let board = BoardAvx2(self.pop_xmm());
-                self.push_state(state);
+                self.push_state(eval_state);
                 State::EvaluateMove(board)
             }
 
@@ -260,12 +254,32 @@ impl MeanMax {
                     }
                 }
             }
-
-            State::Return(_) => unreachable!(),
         }
     }
 
-    pub fn cache(&self) -> &EvaluationCache {
+    fn expand_rotations(&mut self, iter: SpawnIter, mut eval_state: EvaluationState) -> State {
+        let rot0 = iter.current_board();
+        let rot1 = rot0.rotate_90();
+        let rot2 = rot1.rotate_90();
+        let rot3 = rot2.rotate_90();
+
+        self.push_xmm(iter.into_inner());
+
+        eval_state.reset_moves();
+        eval_state.add_move();
+        eval_state.add_move();
+        eval_state.add_move();
+        eval_state.add_move();
+
+        self.push_xmm(rot1.into_inner());
+        self.push_xmm(rot2.into_inner());
+        self.push_xmm(rot3.into_inner());
+        self.push_state(eval_state);
+
+        State::EvaluateMove(rot0)
+    }
+
+    pub fn cache(&self) -> &BoardCache<Evaluation> {
         &self.cache
     }
 }
@@ -279,7 +293,7 @@ impl Default for MeanMax {
 #[cfg(test)]
 mod test {
     use super::MeanMax;
-    use crate::{board::BoardAvx2, search::search_state::Evaluation};
+    use crate::{board::BoardAvx2, search::modname::Evaluation};
 
     #[test]
     fn test_mean_max() {
@@ -287,18 +301,15 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        mean_max.search_constraint.set_depth(9);
-        let (move_idx, eval) = mean_max.best_move(board);
+        mean_max.search_constraint.set_depth(6);
+        let (eval, move_idx) = mean_max.best_move(board);
 
-        log::info!(
-            "Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {}",
-            eval.0
-        );
+        log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
 
         assert_eq!(move_idx, 2);
-        assert_eq!(eval, Evaluation(-1161));
-        assert_eq!(mean_max.iteration_counter, 3450052);
+        assert_eq!(eval, Evaluation(-1146));
+        assert_eq!(mean_max.iteration_counter, 7944);
     }
 
     #[test]
@@ -308,10 +319,10 @@ mod test {
 
         let mut mean_max = MeanMax::new();
         mean_max.search_constraint.set_depth(3);
-        let (move_idx, eval) = mean_max.best_move(board);
+        let (eval, move_idx) = mean_max.best_move(board);
 
         assert_eq!(move_idx, 3);
-        assert_eq!(eval, Evaluation(0));
-        assert_eq!(mean_max.iteration_counter, 12051540);
+        assert_eq!(eval, Evaluation(560));
+        assert_eq!(mean_max.iteration_counter, 165376);
     }
 }

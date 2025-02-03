@@ -6,6 +6,7 @@ edition = "2024"
 [profile.release]
 lto = false
 opt-level = 3
+strip = "debuginfo"
 
 [[bench]]
 name = "benchmarks"
@@ -13,6 +14,8 @@ harness = false
 
 [dependencies]
 anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
 env_logger = "0.11.6"
 itertools = "0.14"
 log = "0.4.25"

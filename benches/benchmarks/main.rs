@@ -2,7 +2,10 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use itertools::Itertools as _;
 use twenty_fourty_eight_solver::{
     board::{BoardAvx2, test_utils},
-    search::search_state::{SpawnIter, Transition},
+    search::{
+        mean_max::MeanMax,
+        search_state::{SpawnIter, Transition},
+    },
 };
 
 /// Generate a vector of random boards for benchmarking.
@@ -140,11 +143,33 @@ fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
     });
 }
 
+/// Benchmark search
+fn bench_mean_max(c: &mut Criterion) {
+    let cells = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [1, 2, 3, 0]];
+    let board = BoardAvx2::from_array(cells).unwrap();
+
+    let mut mean_max = MeanMax::new();
+    mean_max.search_constraint.set_depth(7);
+    let (eval, move_idx) = mean_max.best_move(board);
+
+    let mut group = c.benchmark_group("benchmark_mean_max");
+    group.bench_function("Benchmark almost filled", |b| {
+        b.iter(|| {
+            mean_max.clear_cache();
+            mean_max.best_move(board)
+        });
+    });
+
+    log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
+    log::info!("Iterations: {}", mean_max.iteration_counter);
+}
+
 criterion_group!(
     benches,
     bench_swipe,
     bench_rotate,
     bench_spawn_until_done,
-    bench_swipe_and_spawn_interleaved
+    bench_swipe_and_spawn_interleaved,
+    bench_mean_max,
 );
 criterion_main!(benches);

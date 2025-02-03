@@ -12,7 +12,13 @@ need_stdout = true
 allow_warnings = true
 
 [jobs.bench]
-command = ["cargo", "bench",  "--bench", "benchmarks", "--", "--baseline", "native", "--color=always"]
+command = [
+    "cargo", "bench",
+    "--bench", "benchmarks",
+    "--", "mean_max",
+    # "--baseline", "native",
+    "--color=always",
+]
 need_stdout = true
 allow_warnings = true
 on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
@@ -62,7 +68,7 @@ on_success = "job:asm"
 
 [jobs.nextest]
 command = [
-    "cargo", "nextest", "run", "state",
+    "cargo", "nextest", "run", 
     "--hide-progress-bar", "--failure-output", "final"
 ]
 need_stdout = true

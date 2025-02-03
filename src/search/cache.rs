@@ -1,20 +1,19 @@
-use super::search_state::Evaluation;
 use crate::board::BoardAvx2;
 use std::collections::HashMap;
 
 #[derive(Clone)]
-struct CacheEntry {
+struct CacheEntry<T> {
     depth: i32,
-    eval: Evaluation,
+    data: T,
 }
 
-pub struct EvaluationCache {
-    cache: HashMap<u128, CacheEntry>,
+pub struct BoardCache<T> {
+    cache: HashMap<u128, CacheEntry<T>>,
     hit_counter: u32,
     lookup_counter: u32,
 }
 
-impl EvaluationCache {
+impl<T> BoardCache<T> {
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),
@@ -23,29 +22,33 @@ impl EvaluationCache {
         }
     }
 
-    pub fn get(&mut self, board: BoardAvx2, depth: i32) -> Option<Evaluation> {
+    pub fn get(&mut self, board: BoardAvx2, depth: i32) -> Option<&T> {
         self.lookup_counter += 1;
 
         match self.cache.get(&board.into_u128()) {
             Some(entry) if entry.depth >= depth => {
                 self.hit_counter += 1;
-                Some(entry.eval.clone())
+                Some(&entry.data)
             }
             _ => None,
         }
     }
 
-    pub fn insert(&mut self, board: BoardAvx2, depth: i32, eval: Evaluation) {
-        let cache_entry = CacheEntry { depth, eval };
+    pub fn insert(&mut self, board: BoardAvx2, depth: i32, eval: T) {
+        let cache_entry = CacheEntry { depth, data: eval };
+        use std::collections::hash_map::Entry;
 
-        self.cache
-            .entry(board.into_u128())
-            .and_modify(|entry| {
-                if entry.depth <= depth {
-                    *entry = cache_entry.clone();
-                }
-            })
-            .or_insert(cache_entry);
+        match self.cache.entry(board.into_u128()) {
+            Entry::Occupied(mut occupied_entry) if occupied_entry.get().depth <= depth => {
+                occupied_entry.insert(cache_entry);
+            }
+
+            Entry::Occupied(_) => { /* Do nothing */ }
+
+            Entry::Vacant(vacant_entry) => {
+                vacant_entry.insert(cache_entry);
+            }
+        };
     }
 
     pub fn hit_rate(&self) -> f64 {
@@ -67,7 +70,7 @@ impl EvaluationCache {
     }
 }
 
-impl Default for EvaluationCache {
+impl<T> Default for BoardCache<T> {
     fn default() -> Self {
         Self::new()
     }

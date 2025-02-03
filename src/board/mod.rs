@@ -5,6 +5,7 @@ use std::{
 
 use thiserror::Error;
 
+pub mod editor;
 pub mod simd_utils;
 
 #[derive(Clone, Copy)]
@@ -126,6 +127,15 @@ impl Ord for BoardAvx2 {
     }
 }
 
+fn val_to_char(v: u8) -> char {
+    match v {
+        0 => '.',
+        1..=9 => (b'0' + v) as char,
+        10..18 => (b'a' + (v - 10)) as char,
+        _ => unreachable!(),
+    }
+}
+
 fn format_row<'a>(
     f: &mut fmt::Formatter<'_>,
     row: impl IntoIterator<Item = &'a u8>,
@@ -133,10 +143,13 @@ fn format_row<'a>(
     let mut row = row.into_iter();
 
     if let Some(c) = row.next() {
-        write!(f, "{c:02x}")?;
+        f.write_char(val_to_char(*c))?;
     }
 
-    row.try_for_each(|c| write!(f, " {c:02x}"))
+    row.try_for_each(|c| {
+        f.write_char(' ')?;
+        f.write_char(val_to_char(*c))
+    })
 }
 
 impl fmt::Debug for BoardAvx2 {

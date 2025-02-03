@@ -57,17 +57,17 @@ impl SpawnIter {
 
         let mut filled_mask = msb | state.wrapping_sub(1);
         if filled_mask == u16::MAX {
-            unsafe {
-                crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
-                crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
-            }
+            //unsafe {
+            //    crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
+            //    crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
+            //}
 
             // Create a mask to extract the shifted value at previous_spawn position
             inner = unsafe { _mm_blendv_epi8(inner, shifted, shifted) };
-            unsafe {
-                crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
-                crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
-            }
+            //unsafe {
+            //    crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
+            //    crate::debug_println!("shifted: {:032x}", std::mem::transmute::<_, u128>(shifted));
+            //}
 
             filled_mask = msb ^ state;
             result = Transition::Switch;
@@ -80,7 +80,7 @@ impl SpawnIter {
             let mut cells: [u8; 16] = tb(inner);
             cells.swap_unchecked(next_spawn_idx, previous_spawn);
 
-            crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
+            //crate::debug_println!("inner:   {:032x}", std::mem::transmute::<_, u128>(inner));
             self.0 = _mm_loadu_si128(cells.as_ptr().cast());
 
             let state_mask = _mm_set1_epi8(0b01000000);
@@ -126,88 +126,6 @@ impl Debug for SpawnIter {
         )
         .field(&BoardAvx2(self.0))
         .finish()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Evaluation(pub i16);
-
-impl Evaluation {
-    pub const TERM: Self = Evaluation(-0x07FF);
-    pub const MIN: Self = Evaluation(i16::MIN);
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub(super) struct EvaluationState {
-    numerator: i16,
-    denominator: u16,
-    maximum_eval: Evaluation,
-    remaining_moves: u16,
-}
-
-impl EvaluationState {
-    pub fn new() -> EvaluationState {
-        EvaluationState {
-            numerator: 0,
-            denominator: 0,
-            maximum_eval: Evaluation::MIN,
-            remaining_moves: 0,
-        }
-    }
-
-    pub fn push_move_eval(&mut self, eval: Evaluation) -> bool {
-        debug_assert!(self.remaining_moves > 0);
-        self.maximum_eval = self.maximum_eval.clone().max(eval);
-        self.remaining_moves -= 1;
-
-        let done = self.remaining_moves == 0;
-        if done {
-            *self = self.clone().push_spawn_eval(self.maximum_eval.clone())
-        }
-
-        done
-    }
-
-    pub fn push_spawn_eval(mut self, value: Evaluation) -> Self {
-        self.numerator += value.0;
-        self.denominator += 1;
-        self
-    }
-
-    pub fn evaluate(self) -> Evaluation {
-        debug_assert_eq!(self.remaining_moves, 0, "we have not tried all the moves");
-        debug_assert_eq!(self.denominator % 3, 0, "denominator not divisible by 3");
-        debug_assert!(self.denominator <= 3 * 15, "denominator not divisible by 3");
-        Evaluation(self.numerator / self.denominator as i16)
-    }
-
-    pub fn switch(mut self) -> Self {
-        debug_assert!(self.denominator <= 15, "denominator not divisible by 3");
-        self.numerator *= 2;
-        self.denominator *= 2;
-        self
-    }
-
-    pub fn reset_moves(&mut self) {
-        self.remaining_moves = 0;
-        self.maximum_eval = Evaluation::MIN;
-    }
-
-    pub fn add_move(&mut self) {
-        self.remaining_moves += 1;
-    }
-}
-
-impl From<u64> for EvaluationState {
-    fn from(value: u64) -> Self {
-        unsafe { std::mem::transmute(value) }
-    }
-}
-
-impl From<EvaluationState> for u64 {
-    fn from(e: EvaluationState) -> u64 {
-        unsafe { std::mem::transmute(e) }
     }
 }
 

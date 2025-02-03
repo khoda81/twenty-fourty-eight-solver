@@ -1,42 +1,70 @@
+use clap::{Parser, ValueEnum};
 use log::info;
 use rand::seq::IndexedRandom;
 use twenty_fourty_eight_solver::{
-    board::BoardAvx2,
+    board::{self, BoardAvx2},
     search::{
         mean_max::MeanMax,
         search_state::{SpawnIter, Transition},
     },
 };
 
+#[derive(Parser, Debug)]
+#[command(name = "2048 Solver", version, about = "A solver for the 2048 game", long_about = None)]
+struct Args {
+    #[arg(value_enum, default_value = "play")]
+    mode: Mode,
+
+    #[arg(short, long, default_value_t = 3)]
+    depth: i32,
+
+    #[arg(short, long, default_value = "random")]
+    starting_pos: StartingPosition,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    Play,
+    Eval,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum StartingPosition {
+    Random,
+    Manual,
+}
+
 fn main() {
+    let args = Args::parse();
+
     env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
         .init();
 
-    play();
-    //evaluate_heuristic();
+    let board = match args.starting_pos {
+        StartingPosition::Random => random_spawn(BoardAvx2::new().unwrap()).unwrap(),
+        StartingPosition::Manual => interactive_board_editor(),
+    };
+
+    let mut mean_max = MeanMax::new();
+    mean_max.search_constraint.set_depth(args.depth);
+
+    match args.mode {
+        Mode::Play => play(&mut mean_max, board),
+        Mode::Eval => evaluate_heuristic(&mut mean_max, board),
+    }
 }
 
-fn play() {
-    //let cells = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [1, 2, 3, 0]];
-    //let cells = [[0, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
-    //let cells = [[1, 4, 7, 3], [1, 2, 1, 6], [0, 1, 0, 3], [0, 0, 0, 0]];
-    //let mut board = BoardAvx2::from_array(cells).unwrap();
-
-    let mut board = random_spawn(BoardAvx2::new().unwrap()).unwrap();
-    let mut mean_max = MeanMax::new();
-
+pub fn play(mean_max: &mut MeanMax, mut board: BoardAvx2) {
     loop {
         info!("Evaluating:\n{board}");
 
         let start = std::time::Instant::now();
-        mean_max.search_constraint.set_depth(3);
         mean_max.clear_cache();
 
-        let (best_move, eval) = mean_max.best_move(board);
-        eprintln!("\x1B[2J\x1B[1;1H");
+        let (eval, best_move) = mean_max.best_move(board);
         let elapsed = start.elapsed();
-        info!("Best move: {best_move}, Eval: {}", eval.0);
+        info!("Best move: {best_move}, Eval: {eval}");
 
         info!("Iterations: {}", mean_max.iteration_counter);
         info!(
@@ -64,6 +92,7 @@ fn play() {
         let Some(new_board) = random_spawn(board) else {
             break;
         };
+
         board = new_board;
     }
 
@@ -88,14 +117,12 @@ fn random_spawn(board: BoardAvx2) -> Option<BoardAvx2> {
     }
 }
 
-fn evaluate_heuristic() {
+pub fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2) {
     let n_games = 1000;
-    let mut mean_max = MeanMax::new();
-    mean_max.search_constraint.set_depth(0);
 
     let total: u32 = (0..n_games)
         .map(|i| {
-            let score = run_game(&mut mean_max);
+            let score = run_game(mean_max, board);
             log::debug!("Game {i}/{n_games}: {score}");
             score
         })
@@ -105,14 +132,13 @@ fn evaluate_heuristic() {
     log::info!("Avg: {eval} ({total}/{n_games})");
 }
 
-fn run_game(mean_max: &mut MeanMax) -> u32 {
-    let mut board = random_spawn(BoardAvx2::new().unwrap()).unwrap();
+fn run_game(mean_max: &mut MeanMax, mut board: BoardAvx2) -> u32 {
     let mut score = 0;
 
     loop {
         mean_max.clear_cache();
 
-        let (best_move, _) = mean_max.best_move(board);
+        let (_, best_move) = mean_max.best_move(board);
 
         for move_idx in 0..4 {
             if best_move == move_idx {
@@ -131,4 +157,16 @@ fn run_game(mean_max: &mut MeanMax) -> u32 {
     }
 
     score
+}
+
+fn interactive_board_editor() -> BoardAvx2 {
+    println!("Enter the board as a 4x4 grid (use space-separated values, 0 for empty):");
+    let board_values = board::editor::grid_editor().unwrap();
+
+    let board = BoardAvx2::from_array(board_values).unwrap();
+    if board == BoardAvx2::new().unwrap() {
+        random_spawn(board).unwrap()
+    } else {
+        board
+    }
 }
