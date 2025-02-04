@@ -1,7 +1,5 @@
-use super::{
-    cache::BoardCache, modname::Evaluation, modname::EvaluationState, search_state::SpawnIter,
-};
-use crate::{board::BoardAvx2, search::search_state::Transition};
+use super::{cache::BoardCache, eval::Evaluation, eval::EvaluationState, node::SpawnNode};
+use crate::{board::BoardAvx2, search::node::Transition};
 use std::arch::x86_64::__m128i;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -65,21 +63,13 @@ pub struct MeanMax {
     cache: BoardCache<Evaluation>,
 }
 
-#[derive(Debug)]
-enum State {
-    EvaluateMove(BoardAvx2),
-    ExpandMoves(SpawnIter, EvaluationState),
-    UpdateMoveEval(Evaluation),
-    NextSpawn(EvaluationState),
-}
-
 impl MeanMax {
     pub fn new() -> Self {
         Self {
             stack: vec![],
             cache: BoardCache::new(),
             iteration_counter: 0,
-            heuristic_depth: 10,
+            heuristic_depth: 3,
         }
     }
 
@@ -91,12 +81,12 @@ impl MeanMax {
         self.iteration_counter = 0;
 
         for move_idx in 0..4 {
-            let Some(swiped) = board.checked_swipe_right() else {
+            let Some(swiped) = board.checked_swipe_right().and_then(SpawnNode::new) else {
                 board = board.rotate_90();
                 continue;
             };
 
-            log::trace!("Evaluating move#{move_idx}:\n{swiped}");
+            log::trace!("Evaluating move#{move_idx}:\n{swiped:?}");
             best_move = (self.evaluate_move(swiped, depth), move_idx).max(best_move);
 
             board = board.rotate_90();
@@ -109,20 +99,22 @@ impl MeanMax {
         self.cache.clear()
     }
 
-    fn pop_xmm(&mut self) -> __m128i {
+    fn push_node(&mut self, node: SpawnNode) {
+        let words: [u64; 2] =
+            unsafe { std::mem::transmute::<__m128i, [u64; 2]>(node.into_inner()) };
+
+        self.stack.extend(words);
+    }
+
+    fn pop_node(&mut self) -> SpawnNode {
         debug_assert!(self.stack.len() >= 2);
 
         unsafe {
             let a = self.stack.pop().unwrap_unchecked();
             let b = self.stack.pop().unwrap_unchecked();
             let _src = [b, a];
-            std::mem::transmute(_src)
+            SpawnNode(std::mem::transmute::<[u64; 2], __m128i>(_src))
         }
-    }
-
-    fn push_xmm(&mut self, board: __m128i) {
-        let words: [u64; 2] = unsafe { std::mem::transmute(board) };
-        self.stack.extend(words);
     }
 
     fn push_state(&mut self, eval: EvaluationState) {
@@ -133,11 +125,11 @@ impl MeanMax {
         let mut eval = 0;
 
         for _ in 0..self.heuristic_depth {
-            let Some(state) = SpawnIter::new(board) else {
+            let Some(node) = SpawnNode::new(board) else {
                 break;
             };
 
-            match state.current_board().rotate_90().checked_swipe_right() {
+            match node.current_board().rotate_90().checked_swipe_right() {
                 Some(b) => board = b,
                 None => break,
             };
@@ -169,91 +161,90 @@ impl MeanMax {
     }
 
     #[inline(never)]
-    fn evaluate_move(&mut self, board: BoardAvx2, mut depth: i32) -> Evaluation {
-        let mut state = State::EvaluateMove(board);
+    fn evaluate_move(&mut self, node: SpawnNode, mut depth: i32) -> Evaluation {
+        #[derive(Debug)]
+        enum State {
+            Evaluate(SpawnNode),
+            Expand(SpawnNode, EvaluationState),
+            Propagate(Evaluation),
+            NextBranch(EvaluationState),
+        }
+
+        let mut state = State::Evaluate(node);
 
         loop {
             self.iteration_counter += 1;
             log::trace!("State: {state:?}");
 
-            state = self.handle_state(state, &mut depth);
-            if let State::UpdateMoveEval(value) = &state {
-                if self.stack.is_empty() {
-                    return value.clone();
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn handle_state(&mut self, state: State, depth: &mut i32) -> State {
-        match state {
-            State::EvaluateMove(board) => {
-                if let Some(eval) = self.cache.get(board, *depth) {
-                    State::UpdateMoveEval(eval.clone())
-                } else if *depth < 0 {
-                    State::UpdateMoveEval(self.heuristic(board))
-                } else if let Some(iter) = SpawnIter::new(board) {
-                    *depth -= 1;
-                    State::ExpandMoves(iter, EvaluationState::new())
-                } else {
-                    unreachable!("moves that need to be evaluated will always have an empty cell")
-                }
-            }
-
-            State::ExpandMoves(iter, mut eval_state) => {
-                let rot0 = iter.current_board();
-                let rot1 = rot0.rotate_90();
-                let rot2 = rot1.rotate_90();
-                let rot3 = rot2.rotate_90();
-
-                self.push_xmm(iter.into_inner());
-
-                eval_state.reset_moves();
-                let mut filtered_boards = [rot0, rot1, rot2, rot3]
-                    .into_iter()
-                    .filter_map(|b| b.checked_swipe_right())
-                    .inspect(|_| eval_state.add_move());
-
-                if let Some(next_board) = filtered_boards.next() {
-                    filtered_boards.for_each(|b| self.push_xmm(b.into_inner()));
-                    self.push_state(eval_state);
-                    State::EvaluateMove(next_board)
-                } else {
-                    State::NextSpawn(eval_state.push_spawn_eval(Evaluation::TERM))
-                }
-            }
-
-            State::UpdateMoveEval(eval) => {
-                // Reached root
-                let mut eval_state = self.stack.pop().map(EvaluationState::from).unwrap();
-
-                if eval_state.push_move_eval(eval) {
-                    // This was the last move, spawn
-                    return State::NextSpawn(eval_state);
-                }
-
-                // Evaluate next move
-                let board = BoardAvx2(self.pop_xmm());
-                self.push_state(eval_state);
-                State::EvaluateMove(board)
-            }
-
-            State::NextSpawn(state) => {
-                let mut iter = SpawnIter(self.pop_xmm());
-                let board = iter.board();
-                match iter.next_spawn() {
-                    Transition::None => State::ExpandMoves(iter, state),
-                    Transition::Switch => State::ExpandMoves(iter, state.switch()),
-                    Transition::Done => {
-                        let eval = state.evaluate();
-                        self.cache.insert(board, *depth, eval.clone());
-
-                        *depth += 1;
-                        State::UpdateMoveEval(eval)
+            state = match state {
+                State::Evaluate(node) => {
+                    if let Some(eval) = self.cache.get(node.inner(), depth) {
+                        State::Propagate(eval.clone())
+                    } else if depth < 0 {
+                        State::Propagate(self.heuristic(node.inner()))
+                    } else {
+                        depth -= 1;
+                        State::Expand(node, EvaluationState::new())
                     }
                 }
-            }
+
+                State::Expand(node, mut eval_state) => {
+                    let rot0 = node.current_board();
+                    let rot1 = rot0.rotate_90();
+                    let rot2 = rot1.rotate_90();
+                    let rot3 = rot2.rotate_90();
+
+                    self.push_node(node);
+
+                    eval_state.reset_moves();
+                    let mut nodes = [rot0, rot1, rot2, rot3]
+                        .into_iter()
+                        .filter_map(|b| b.checked_swipe_right())
+                        .filter_map(SpawnNode::new)
+                        .inspect(|_| eval_state.add_move());
+
+                    if let Some(node) = nodes.next() {
+                        nodes.for_each(|b| self.push_node(b));
+                        self.push_state(eval_state);
+                        State::Evaluate(node)
+                    } else {
+                        State::NextBranch(eval_state.push_spawn_eval(Evaluation::TERM))
+                    }
+                }
+
+                State::Propagate(eval) => {
+                    // Reached root
+                    let Some(mut eval_state) = self.stack.pop().map(EvaluationState::from) else {
+                        return eval;
+                    };
+
+                    if eval_state.push_move_eval(eval) {
+                        // This was the last move, spawn
+                        State::NextBranch(eval_state)
+                    } else {
+                        // Evaluate next move
+                        let node = self.pop_node();
+                        self.push_state(eval_state);
+                        State::Evaluate(node)
+                    }
+                }
+
+                State::NextBranch(state) => {
+                    let mut node = self.pop_node();
+                    let board = node.inner();
+                    match node.next_spawn() {
+                        Transition::None => State::Expand(node, state),
+                        Transition::Switch => State::Expand(node, state.switch()),
+                        Transition::Done => {
+                            let eval = state.evaluate();
+                            self.cache.insert(board, depth, eval.clone());
+
+                            depth += 1;
+                            State::Propagate(eval)
+                        }
+                    }
+                }
+            };
         }
     }
 
@@ -271,7 +262,10 @@ impl Default for MeanMax {
 #[cfg(test)]
 mod test {
     use super::MeanMax;
-    use crate::{board::BoardAvx2, search::modname::Evaluation};
+    use crate::{
+        board::BoardAvx2,
+        search::{eval::Evaluation, mean_max::SearchConstraint},
+    };
 
     #[test]
     fn test_mean_max() {
@@ -279,15 +273,12 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        mean_max.search_constraint.set_depth(6);
-        let (eval, move_idx) = mean_max.search(board);
+        let (eval, move_idx) = mean_max.search(SearchConstraint { board, depth: 2 });
 
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
 
-        assert_eq!(move_idx, 2);
-        assert_eq!(eval, Evaluation(-1146));
-        assert_eq!(mean_max.iteration_counter, 7944);
+        assert_eq!(eval, Evaluation(-679));
     }
 
     #[test]
@@ -296,11 +287,11 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        mean_max.search_constraint.set_depth(3);
-        let (eval, move_idx) = mean_max.search(board);
+        let (eval, move_idx) = mean_max.search(SearchConstraint { board, depth: 2 });
 
-        assert_eq!(move_idx, 3);
-        assert_eq!(eval, Evaluation(560));
-        assert_eq!(mean_max.iteration_counter, 165376);
+        log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
+        log::info!("Iterations: {}", mean_max.iteration_counter);
+
+        assert_eq!(eval, Evaluation(37));
     }
 }

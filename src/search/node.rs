@@ -1,8 +1,6 @@
-use std::{arch::x86_64::*, fmt::Debug};
-
-use rand::seq::IndexedRandom as _;
-
 use crate::board::BoardAvx2;
+use rand::seq::IndexedRandom as _;
+use std::{arch::x86_64::*, fmt::Debug};
 
 #[derive()]
 pub struct SpawnNode(pub(crate) __m128i);
@@ -142,10 +140,8 @@ impl Debug for SpawnNode {
 
 #[cfg(test)]
 mod test {
+    use super::{SpawnNode, Transition};
     use std::assert_matches::assert_matches;
-
-    use super::SpawnNode;
-    use crate::search::node::Transition;
 
     #[test]
     fn test_complex() {

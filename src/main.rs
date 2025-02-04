@@ -8,14 +8,14 @@ use twenty_fourty_eight_solver::{
     board::{self, BoardAvx2},
     search::{
         mean_max::{MeanMax, SearchConstraint},
-        search_state::SpawnIter,
+        node::SpawnNode,
     },
 };
 
 #[derive(Parser, Debug)]
 #[command(name = "2048 Solver", version, about = "A solver for the 2048 game", long_about = None)]
 struct Args {
-    #[arg(value_enum, default_value = "play")]
+    #[arg(value_enum, short, long, default_value = "single-game")]
     mode: Mode,
 
     #[arg(short, long)]
@@ -32,14 +32,15 @@ struct Args {
     /// Depth of search for the heuristic
     heuristic_depth: Option<u32>,
 
-    #[arg(long, default_value = "1000")]
+    #[arg(short, long, default_value = "1000")]
     num_eval_games: u64,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum Mode {
-    Play,
     Eval,
+    #[default]
+    SingleGame,
     SingleShot,
 }
 
@@ -54,7 +55,7 @@ fn main() {
     let board = if args.board_editor {
         interactive_board_editor()
     } else {
-        SpawnIter::new(BoardAvx2::new().unwrap())
+        SpawnNode::new(BoardAvx2::new().unwrap())
             .unwrap()
             .random_spawn(&mut rand::rng())
     };
@@ -66,7 +67,7 @@ fn main() {
     }
 
     match args.mode {
-        Mode::Play => play(&mut mean_max, board, args),
+        Mode::SingleGame => play(&mut mean_max, board, args),
         Mode::Eval => evaluate_heuristic(&mut mean_max, board, args),
         Mode::SingleShot => {
             info!("Evaluating:\n{board}");
@@ -97,12 +98,12 @@ fn play(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
 
         let best_move = search_best_move(mean_max, constraint);
 
-        let spawn_iter = SpawnIter::new(constraint.board.swipe_direction(best_move));
+        let spawn_iter = SpawnNode::new(constraint.board.swipe_direction(best_move));
         let Some(spawn_iter) = spawn_iter else { break };
         constraint.board = spawn_iter.random_spawn(&mut rand::rng());
     }
 
-    info!("Game over!\n{board}");
+    info!("Game over!\n{}", constraint.board);
 }
 
 struct Count(f64);
@@ -189,7 +190,7 @@ fn run_game(mean_max: &mut MeanMax, mut constraint: SearchConstraint) -> u32 {
 
         let (_, best_move) = mean_max.search(constraint);
 
-        let spawn_iter = SpawnIter::new(constraint.board.swipe_direction(best_move));
+        let spawn_iter = SpawnNode::new(constraint.board.swipe_direction(best_move));
         let Some(spawn_iter) = spawn_iter else { break };
         constraint.board = spawn_iter.random_spawn(&mut rand::rng());
         score += 1;
@@ -203,7 +204,7 @@ fn interactive_board_editor() -> BoardAvx2 {
 
     let board = BoardAvx2::from_array(board_values).unwrap();
     if board == BoardAvx2::new().unwrap() {
-        SpawnIter::new(board)
+        SpawnNode::new(board)
             .unwrap()
             .random_spawn(&mut rand::rng())
     } else {
