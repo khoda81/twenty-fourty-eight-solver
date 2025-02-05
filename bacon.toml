@@ -7,7 +7,7 @@ enabled = true
 base_volume = "100%" # global volume multiplier
 
 [jobs.asm]
-command = ["cargo", "asm", "--lib", "eval", "--native", "--simplify", "--color"]
+command = ["cargo", "asm", "--lib", "twenty_fourty_eight_solver::search::mean_max::MeanMax::evaluate_move", "1", "--native", "--simplify", "--color"]
 need_stdout = true
 allow_warnings = true
 
@@ -68,7 +68,7 @@ on_success = "job:asm"
 
 [jobs.nextest]
 command = [
-    "cargo", "nextest", "run", 
+    "cargo", "nextest", "run",
     "--hide-progress-bar", "--failure-output", "final"
 ]
 need_stdout = true

@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Evaluation(pub i16);
 
 impl Display for Evaluation {
@@ -10,24 +10,29 @@ impl Display for Evaluation {
 }
 
 impl Evaluation {
-    pub const TERM: Self = Evaluation(-0x07FF);
-    pub const MIN: Self = Evaluation(i16::MIN);
+    pub const TERM: Self = Evaluation(-0x01FF);
+    pub const WORST: Self = Evaluation(i16::MIN);
+    pub const BEST: Self = Evaluation(0x01FF);
+
+    pub fn as_fp(self) -> i32 {
+        self.0 as i32
+    }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct EvaluationState {
-    numerator: i16,
-    denominator: u16,
-    maximum_eval: Evaluation,
-    remaining_moves: u16,
+    pub numerator: i16,
+    pub denominator: u16,
+    pub best_move_eval: Evaluation,
+    pub remaining_moves: u16,
 }
 
 impl EvaluationState {
     const NEW: EvaluationState = EvaluationState {
         numerator: 0,
         denominator: 0,
-        maximum_eval: Evaluation::MIN,
+        best_move_eval: Evaluation::WORST,
         remaining_moves: 0,
     };
 
@@ -37,40 +42,37 @@ impl EvaluationState {
 
     pub fn push_move_eval(&mut self, eval: Evaluation) -> bool {
         debug_assert!(self.remaining_moves > 0);
-        self.maximum_eval = self.maximum_eval.clone().max(eval);
+        self.best_move_eval = self.best_move_eval.max(eval);
         self.remaining_moves -= 1;
 
         let done = self.remaining_moves == 0;
         if done {
-            *self = self.clone().push_spawn_eval(self.maximum_eval.clone())
+            self.push_spawn_eval(self.best_move_eval)
         }
 
         done
     }
 
-    pub fn push_spawn_eval(mut self, value: Evaluation) -> Self {
+    pub fn push_spawn_eval(&mut self, value: Evaluation) {
         self.numerator += value.0;
         self.denominator += 1;
-        self
     }
 
     pub fn evaluate(self) -> Evaluation {
         debug_assert_eq!(self.remaining_moves, 0, "we have not tried all the moves");
-        debug_assert_eq!(self.denominator % 3, 0, "denominator not divisible by 3");
         debug_assert!(self.denominator <= 3 * 15, "denominator not divisible by 3");
         Evaluation(self.numerator / self.denominator as i16)
     }
 
-    pub fn switch(mut self) -> Self {
+    pub fn switch(&mut self) {
         debug_assert!(self.denominator <= 15, "denominator not divisible by 3");
         self.numerator *= 2;
         self.denominator *= 2;
-        self
     }
 
     pub fn reset_moves(&mut self) {
         self.remaining_moves = 0;
-        self.maximum_eval = Evaluation::MIN;
+        self.best_move_eval = Evaluation::WORST;
     }
 
     pub fn add_move(&mut self) {

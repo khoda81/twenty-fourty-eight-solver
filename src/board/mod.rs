@@ -173,12 +173,12 @@ impl fmt::Debug for BoardAvx2 {
         let mut rows = self.to_array().into_iter();
 
         if let Some(row) = rows.next() {
-            format_row(f, &row)?;
+            format_row(f, &row)?
         }
 
         for row in rows {
             f.write_str(" | ")?;
-            format_row(f, &row)?;
+            format_row(f, &row)?
         }
 
         Ok(())
@@ -213,12 +213,14 @@ impl fmt::Display for BoardAvx2 {
         let mut rows = self.to_array().into_iter();
 
         if let Some(row) = rows.next() {
-            format_row_display(f, &row)?
+            //format_row_display(f, &row)?
+            format_row(f, &row)?
         }
 
         for row in rows {
             f.write_char('\n')?;
-            format_row_display(f, &row)?
+            //format_row_display(f, &row)?
+            format_row(f, &row)?
         }
 
         Ok(())

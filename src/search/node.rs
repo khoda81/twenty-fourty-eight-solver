@@ -2,7 +2,7 @@ use crate::board::BoardAvx2;
 use rand::seq::IndexedRandom as _;
 use std::{arch::x86_64::*, fmt::Debug};
 
-#[derive()]
+#[derive(Clone)]
 pub struct SpawnNode(pub(crate) __m128i);
 
 #[derive(Debug)]

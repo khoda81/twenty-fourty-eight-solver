@@ -70,9 +70,12 @@ fn main() {
         Mode::SingleGame => play(&mut mean_max, board, args),
         Mode::Eval => evaluate_heuristic(&mut mean_max, board, args),
         Mode::SingleShot => {
-            info!("Evaluating:\n{board}");
+            let constraint = SearchConstraint {
+                board,
+                depth: args.depth.unwrap_or(7),
+            };
 
-            let best_move = search_best_move(&mut mean_max, SearchConstraint { board, depth: 7 });
+            let best_move = search_best_move(&mut mean_max, constraint);
             info!("Selected: {best_move}");
             let board = board.swipe_direction(best_move);
             info!("Board:\n{board}");
@@ -160,9 +163,9 @@ fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
     }
 
     let style =
-        ProgressStyle::with_template("{pos}/{len} Games [{wide_bar:^.cyan/blue}] Eta: {eta} {msg}")
+        ProgressStyle::with_template("{pos}/{len} Games [{wide_bar:^.cyan/8}] Eta: {eta} {msg}")
             .unwrap()
-            .progress_chars("=> ");
+            .progress_chars("=>.");
 
     let pb = ProgressBar::new(args.num_eval_games).with_style(style);
     let mut total = 0;
