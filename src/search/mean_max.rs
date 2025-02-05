@@ -63,7 +63,7 @@ pub struct MeanMax {
     pub heuristic_depth: u32,
 
     eval_cache: BoardCache<Evaluation>,
-    lb_cache: BoardCache<Evaluation>,
+    prune_cache: BoardCache<Evaluation>,
 }
 
 impl MeanMax {
@@ -71,7 +71,7 @@ impl MeanMax {
         Self {
             stack: vec![],
             eval_cache: BoardCache::new(),
-            lb_cache: BoardCache::new(),
+            prune_cache: BoardCache::new(),
             iteration_counter: 0,
             heuristic_depth: 3,
         }
@@ -101,7 +101,8 @@ impl MeanMax {
     }
 
     pub fn clear_cache(&mut self) {
-        self.eval_cache.clear()
+        self.eval_cache.clear();
+        self.prune_cache.clear();
     }
 
     fn push_node(&mut self, node: SpawnNode) {
@@ -203,6 +204,12 @@ impl MeanMax {
                 Action::Evaluate(node) => {
                     if let Some(eval) = self.eval_cache.get(node.inner(), depth) {
                         Action::Propagate(*eval)
+                    } else if self
+                        .prune_cache
+                        .get(node.inner(), depth)
+                        .is_some_and(|ub| ub.as_fp() <= lower_bound)
+                    {
+                        Action::Propagate(Evaluation(lower_bound.try_into().unwrap()))
                     } else if depth <= 0 {
                         Action::Propagate(self.heuristic(node.inner()))
                     } else {
@@ -285,8 +292,8 @@ impl MeanMax {
 
                     let transition = node.next_spawn();
                     if let Transition::Switch = transition {
-                        state.switch()
-                    };
+                        state.switch();
+                    }
 
                     if let Transition::Done = transition {
                         let eval = state.evaluate();
@@ -295,12 +302,17 @@ impl MeanMax {
                         depth += 1;
                         Action::Propagate(eval)
                     } else {
+                        let lb_origin = lower_bound;
                         let max_loss = (max_eval - lower_bound) * max_denominator;
                         let gain = state.denominator as i32 * max_eval - state.numerator as i32;
                         lower_bound = max_eval - max_loss + gain;
                         if lower_bound > max_eval {
                             // Prune
                             depth += 1;
+
+                            self.prune_cache
+                                .insert(board, depth, Evaluation(lb_origin as i16));
+
                             Action::Propagate(state.evaluate())
                         } else {
                             Action::Expand(node, state)
@@ -311,8 +323,12 @@ impl MeanMax {
         }
     }
 
-    pub fn cache(&self) -> &BoardCache<Evaluation> {
+    pub fn eval_cache(&self) -> &BoardCache<Evaluation> {
         &self.eval_cache
+    }
+
+    pub fn prune_cache(&self) -> &BoardCache<Evaluation> {
+        &self.prune_cache
     }
 }
 
@@ -341,7 +357,7 @@ mod test {
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
 
-        assert_eq!(eval, Evaluation(-679));
+        assert_eq!(eval, Evaluation(150));
     }
 
     #[test]
@@ -355,7 +371,7 @@ mod test {
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
 
-        assert_eq!(eval, Evaluation(37));
+        assert_eq!(eval, Evaluation(511));
     }
 
     #[test]
@@ -369,6 +385,6 @@ mod test {
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
 
-        assert_eq!(eval, Evaluation(37));
+        assert_eq!(eval, Evaluation(511));
     }
 }

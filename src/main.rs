@@ -143,9 +143,16 @@ fn search_best_move(mean_max: &mut MeanMax, search_constraint: SearchConstraint)
         info!("{:.0} iterations in {elapsed:.2?}", Count(iterations));
     }
 
-    let cache = mean_max.cache();
+    let cache = mean_max.eval_cache();
     info!(
-        "Hit rate: {:.3} ({:.0}/{:.0})",
+        "Eval cache hit rate: {:.3} ({:.0}/{:.0})",
+        cache.hit_rate(),
+        Count(cache.hit_counter() as f64),
+        Count(cache.lookup_counter() as f64),
+    );
+    let cache = mean_max.prune_cache();
+    info!(
+        "Prune cache hit rate: {:.3} ({:.0}/{:.0})",
         cache.hit_rate(),
         Count(cache.hit_counter() as f64),
         Count(cache.lookup_counter() as f64),
