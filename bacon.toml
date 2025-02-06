@@ -16,7 +16,7 @@ command = [
     "cargo", "bench",
     "--bench", "benchmarks",
     "--", "mean_max",
-    # "--baseline", "native",
+    "--baseline", "iterative",
     "--color=always",
 ]
 need_stdout = true

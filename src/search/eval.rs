@@ -14,7 +14,7 @@ impl Display for Evaluation {
 impl Evaluation {
     pub const TERMINAL: Self = Evaluation(0);
     pub const WORST: Self = Evaluation(0);
-    pub const BEST: Self = Evaluation(1455); // (2**16 - 1) / (3 * 15)
+    pub const BEST: Self = Evaluation(0b0000_0101_1010_1111); // (2**16 - 1) / (3 * 15)
 
     pub fn new(eval: u16) -> Self {
         debug_assert!(
@@ -48,7 +48,7 @@ pub struct EvaluationState {
 impl EvaluationState {
     pub fn new(lower_bound: Evaluation, board: BoardAvx2) -> EvaluationState {
         EvaluationState {
-            max_loss: (Evaluation::BEST.0 - lower_bound.0) * board.num_empty() as u16 * 3,
+            max_loss: (Evaluation::BEST.0 - lower_bound.0) * total_weight(board),
             numerator: 0,
             denominator: 0,
             best_move_eval: Evaluation::WORST,
@@ -97,7 +97,7 @@ impl EvaluationState {
         self.remaining_moves += 1;
     }
 
-    pub fn lower_bound(&self) -> Evaluation {
+    pub fn required_lower_bound(&self) -> Evaluation {
         let best = Evaluation::BEST.as_u16();
         let loss = self.loss();
 
@@ -112,6 +112,10 @@ impl EvaluationState {
         Evaluation::new(eval).max(self.best_move_eval)
     }
 
+    pub fn upper_bound(&self, board: BoardAvx2) -> Evaluation {
+        Evaluation::new(Evaluation::BEST.as_u16() - self.loss() / total_weight(board))
+    }
+
     fn loss(&self) -> u16 {
         let best = Evaluation::BEST.as_u16();
         let weight = self.denominator as u16;
@@ -122,6 +126,10 @@ impl EvaluationState {
     pub fn prunable(&self) -> bool {
         self.loss() >= self.max_loss
     }
+}
+
+fn total_weight(board: BoardAvx2) -> u16 {
+    board.num_empty() as u16 * 3
 }
 
 impl From<u64> for EvaluationState {

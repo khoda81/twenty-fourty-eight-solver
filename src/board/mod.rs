@@ -185,29 +185,6 @@ impl fmt::Debug for BoardAvx2 {
     }
 }
 
-fn format_row_display<'a>(
-    f: &mut fmt::Formatter<'_>,
-    row: impl IntoIterator<Item = &'a u8>,
-) -> Result<(), fmt::Error> {
-    let mut row = row.into_iter();
-
-    if let Some(c) = row.next() {
-        if *c == 0 {
-            f.write_str(" .")?
-        } else {
-            write!(f, "{c:2x}")?
-        }
-    }
-
-    row.try_for_each(|c| {
-        if *c == 0 {
-            f.write_str(" .")
-        } else {
-            write!(f, "{c:2x}")
-        }
-    })
-}
-
 impl fmt::Display for BoardAvx2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut rows = self.to_array().into_iter();

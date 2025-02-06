@@ -225,9 +225,7 @@ fn run_game(mean_max: &mut MeanMax, mut constraint: SearchConstraint, args: &Arg
             constraint.deadline = Some(Instant::now() + interval);
         }
 
-        let (_, best_move) = mean_max
-            .search_dynamic(constraint)
-            .expect("Search constraints are too tight");
+        let (_, best_move) = mean_max.search_flexible(constraint);
 
         let spawn_iter = SpawnNode::new(constraint.board.swipe_direction(best_move));
         let Some(spawn_iter) = spawn_iter else { break };

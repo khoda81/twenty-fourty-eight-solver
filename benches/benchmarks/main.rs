@@ -149,14 +149,14 @@ fn bench_mean_max(c: &mut Criterion) {
     let board = BoardAvx2::from_array(cells).unwrap();
 
     let mut mean_max = MeanMax::new();
-    let search_constraint = SearchConstraint { board, depth: 7 };
-    let (eval, move_idx) = mean_max.search(search_constraint);
+    let search_constraint = SearchConstraint::new(board).depth(7);
+    let (eval, move_idx) = mean_max.search_fixed(search_constraint).unwrap();
 
     let mut group = c.benchmark_group("benchmark_mean_max");
     group.bench_function("Benchmark almost filled", |b| {
         b.iter(|| {
             mean_max.clear_cache();
-            mean_max.search(search_constraint)
+            mean_max.search_fixed(search_constraint).unwrap()
         });
     });
 
