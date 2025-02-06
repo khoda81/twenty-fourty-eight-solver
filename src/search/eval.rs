@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
+use crate::board::BoardAvx2;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Evaluation(pub i16);
+pub struct Evaluation(u16);
 
 impl Display for Evaluation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -10,34 +12,48 @@ impl Display for Evaluation {
 }
 
 impl Evaluation {
-    pub const TERM: Self = Evaluation(-0x01FF);
-    pub const WORST: Self = Evaluation(i16::MIN);
-    pub const BEST: Self = Evaluation(0x01FF);
+    pub const TERMINAL: Self = Evaluation(0);
+    pub const WORST: Self = Evaluation(0);
+    pub const BEST: Self = Evaluation(1455); // (2**16 - 1) / (3 * 15)
 
-    pub fn as_fp(self) -> i32 {
-        self.0 as i32
+    pub fn new(eval: u16) -> Self {
+        debug_assert!(
+            Self(eval) <= Self::BEST,
+            "eval should be less or equal to best eval"
+        );
+
+        Self(eval)
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.0
     }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct EvaluationState {
-    pub numerator: i16,
-    pub denominator: u16,
+    // (best - lower_bound) * total_weight
+    pub max_loss: u16,
+    /// Sum of the brach evaluations so far
+    pub numerator: u16,
+    /// Sum of the branch weights so far
+    pub denominator: u8,
+    /// Number of moves remaining
+    pub remaining_moves: u8,
+    /// Evaluation of the best move
     pub best_move_eval: Evaluation,
-    pub remaining_moves: u16,
 }
 
 impl EvaluationState {
-    const NEW: EvaluationState = EvaluationState {
-        numerator: 0,
-        denominator: 0,
-        best_move_eval: Evaluation::WORST,
-        remaining_moves: 0,
-    };
-
-    pub fn new() -> EvaluationState {
-        Self::NEW
+    pub fn new(lower_bound: Evaluation, board: BoardAvx2) -> EvaluationState {
+        EvaluationState {
+            max_loss: (Evaluation::BEST.0 - lower_bound.0) * board.num_empty() as u16 * 3,
+            numerator: 0,
+            denominator: 0,
+            best_move_eval: Evaluation::WORST,
+            remaining_moves: 0,
+        }
     }
 
     pub fn push_move_eval(&mut self, eval: Evaluation) -> bool {
@@ -61,7 +77,8 @@ impl EvaluationState {
     pub fn evaluate(self) -> Evaluation {
         debug_assert_eq!(self.remaining_moves, 0, "we have not tried all the moves");
         debug_assert!(self.denominator <= 3 * 15, "denominator not divisible by 3");
-        Evaluation(self.numerator / self.denominator as i16)
+
+        Evaluation::new(self.numerator / self.denominator as u16)
     }
 
     pub fn switch(&mut self) {
@@ -70,7 +87,7 @@ impl EvaluationState {
         self.denominator *= 2;
     }
 
-    pub fn reset_moves(&mut self) {
+    pub fn next_branch(&mut self) {
         self.remaining_moves = 0;
         self.best_move_eval = Evaluation::WORST;
     }
@@ -78,11 +95,31 @@ impl EvaluationState {
     pub fn add_move(&mut self) {
         self.remaining_moves += 1;
     }
-}
 
-impl Default for EvaluationState {
-    fn default() -> Self {
-        Self::new()
+    pub fn lower_bound(&self) -> Evaluation {
+        let best = Evaluation::BEST.as_u16();
+        let loss = self.loss();
+
+        let eval = (best + loss).saturating_sub(self.max_loss);
+        debug_assert!(
+            eval <= best,
+            "loss={} is smaller than gain={loss}, {}/{}",
+            self.max_loss,
+            self.numerator,
+            self.denominator
+        );
+        Evaluation::new(eval).max(self.best_move_eval)
+    }
+
+    fn loss(&self) -> u16 {
+        let best = Evaluation::BEST.as_u16();
+        let weight = self.denominator as u16;
+
+        weight * best - self.numerator
+    }
+
+    pub fn prunable(&self) -> bool {
+        self.loss() >= self.max_loss
     }
 }
 

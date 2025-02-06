@@ -99,7 +99,7 @@ fn bench_spawn_until_done(c: &mut Criterion) {
                 };
 
                 while !matches!(state.next_spawn(), Transition::Done) {
-                    black_box(state.current_board());
+                    black_box(state.current_branch());
                 }
             }
         });
@@ -134,7 +134,7 @@ fn bench_swipe_and_spawn_interleaved(c: &mut Criterion) {
                         continue;
                     };
 
-                    board = state.current_board();
+                    board = state.current_branch();
                 }
 
                 black_box(board);

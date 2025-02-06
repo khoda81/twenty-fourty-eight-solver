@@ -90,12 +90,14 @@ on_success = "back" # so that we don't open the browser at each change
 # if it makes sense for this crate.
 [jobs.run]
 command = [
-    "cargo", "run", "--release"
+    "cargo", "run"
     # put launch parameters for your program behind a `--` separator
 ]
 need_stdout = true
 allow_warnings = true
-background = true
+background = false
+on_change_strategy = "kill_then_restart"
+on_success = "play-sound(name=90s-game-ui-6,volume=100%)"
 
 # Run your long-running application (eg server) and have the result displayed in bacon.
 # For programs that never stop (eg a server), `background` is set to false
@@ -137,3 +139,4 @@ shift-a = "job:asm"
 t = "job:nextest"
 shift-b = "job:bench"
 r = "job:run-long"
+shift-r = "job:run"

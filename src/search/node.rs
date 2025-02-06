@@ -84,7 +84,7 @@ impl SpawnNode {
         }
     }
 
-    pub fn current_board(&self) -> BoardAvx2 {
+    pub fn current_branch(&self) -> BoardAvx2 {
         unsafe {
             let mask = _mm_set1_epi8(0b10011111_u8 as i8);
             BoardAvx2(_mm_and_si128(self.0, mask))
@@ -97,7 +97,7 @@ impl SpawnNode {
 
         loop {
             for _ in 0..weight {
-                spawns.push(self.current_board());
+                spawns.push(self.current_branch());
             }
 
             match self.next_spawn() {
@@ -110,7 +110,7 @@ impl SpawnNode {
         *spawns.choose(rng).unwrap()
     }
 
-    pub fn inner(&self) -> BoardAvx2 {
+    pub fn board(&self) -> BoardAvx2 {
         let Self(mut inner) = *self;
 
         let shifted = unsafe { _mm_slli_epi16::<1>(inner) };
@@ -150,60 +150,60 @@ mod test {
 
         let mut search_state = SpawnNode::new(board).unwrap();
 
-        assert_eq!(search_state.inner(), board);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.board(), board);
+        assert_eq!(search_state.current_branch().to_array(), [
             [1, 1, 0, 1],
             [0, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [0, 1, 1, 1],
             [0, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [0, 1, 0, 1],
             [1, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::Switch);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [2, 1, 0, 1],
             [0, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [0, 1, 2, 1],
             [0, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::None);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [0, 1, 0, 1],
             [2, 2, 2, 1],
             [2, 2, 2, 1],
             [1, 1, 1, 1]
         ]);
 
-        assert_eq!(search_state.inner(), board);
+        assert_eq!(search_state.board(), board);
         assert_matches!(search_state.next_spawn(), Transition::Done);
         assert_matches!(search_state.next_spawn(), Transition::Done);
         assert_matches!(search_state.next_spawn(), Transition::Done);
@@ -223,8 +223,8 @@ mod test {
         let board = crate::board::BoardAvx2::from_array(board).unwrap();
         let mut search_state = SpawnNode::new(board).unwrap();
 
-        assert_eq!(search_state.inner(), board);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.board(), board);
+        assert_eq!(search_state.current_branch().to_array(), [
             [1, 1, 1, 1],
             [1, 1, 1, 1],
             [1, 1, 1, 1],
@@ -232,8 +232,8 @@ mod test {
         ]);
 
         assert_matches!(search_state.next_spawn(), Transition::Switch);
-        assert_eq!(search_state.inner(), board);
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.board(), board);
+        assert_eq!(search_state.current_branch().to_array(), [
             [1, 1, 1, 1],
             [1, 1, 1, 1],
             [1, 1, 1, 1],
@@ -252,8 +252,8 @@ mod test {
         let mut search_state = SpawnNode::new(board).unwrap();
         eprintln!("{search_state:?}, {board:?}");
 
-        assert_eq!(search_state.inner(), board, "spawner: {search_state:?}");
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.board(), board, "spawner: {search_state:?}");
+        assert_eq!(search_state.current_branch().to_array(), [
             [1, 1, 1, 1],
             [1, 1, 1, 1],
             [1, 1, 1, 1],
@@ -264,9 +264,9 @@ mod test {
         assert_matches!(search_state.next_spawn(), Transition::Switch);
         eprintln!("After next: {search_state:?}, {board:?}");
 
-        assert_eq!(search_state.inner(), board, "spawner: {search_state:?}");
+        assert_eq!(search_state.board(), board, "spawner: {search_state:?}");
 
-        assert_eq!(search_state.current_board().to_array(), [
+        assert_eq!(search_state.current_branch().to_array(), [
             [1, 1, 1, 1],
             [1, 1, 2, 1],
             [1, 1, 1, 1],
@@ -286,7 +286,7 @@ mod test {
 
         let find = |search_state: &SpawnNode| {
             search_state
-                .current_board()
+                .current_branch()
                 .to_array()
                 .as_flattened()
                 .iter()
