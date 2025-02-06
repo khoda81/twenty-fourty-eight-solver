@@ -1,13 +1,15 @@
 use rand::Rng;
+use thiserror::Error;
 
 use super::{cache::BoardCache, eval::Evaluation, eval::EvaluationState, node::SpawnNode};
 use crate::{board::BoardAvx2, search::node::Transition};
-use std::arch::x86_64::__m128i;
+use std::{arch::x86_64::__m128i, time::Instant};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct SearchConstraint {
     pub board: BoardAvx2,
     pub depth: i32,
+    pub deadline: Option<Instant>,
 }
 
 impl SearchConstraint {
@@ -18,8 +20,23 @@ impl SearchConstraint {
         575, 578, 580, 583, 585, 588, 590, 593, 595, 597,
     ];
 
-    pub fn new(board: BoardAvx2, depth: i32) -> Self {
-        Self { board, depth }
+    pub fn new(board: BoardAvx2) -> Self {
+        Self {
+            board,
+            depth: 0,
+            deadline: None,
+        }
+    }
+
+    pub fn depth(self, depth: i32) -> Self {
+        Self { depth, ..self }
+    }
+
+    pub fn deadline(self, deadline: Instant) -> Self {
+        Self {
+            deadline: Some(deadline),
+            ..self
+        }
     }
 
     pub fn sat(&self) -> bool {
@@ -55,6 +72,10 @@ impl SearchConstraint {
     }
 }
 
+#[derive(Debug, Error)]
+#[error("Deadline reached before the search was complete")]
+pub struct SearchError;
+
 pub struct MeanMax {
     stack: Vec<u64>,
 
@@ -77,12 +98,65 @@ impl MeanMax {
         }
     }
 
-    pub fn search(
-        &mut self,
-        SearchConstraint { mut board, depth }: SearchConstraint,
-    ) -> (Evaluation, u16) {
-        let mut best_move = (Evaluation::WORST, 0);
+    pub fn search_flexible(&mut self, mut constraint: SearchConstraint) -> (Evaluation, u16) {
         self.iteration_counter = 0;
+        let deadline = constraint.deadline.take();
+        let mut result = self
+            .search_fixed(constraint)
+            .expect("search should not fail without deadline");
+
+        constraint.deadline = deadline;
+        constraint.depth += 1;
+
+        while let Ok(best_move) = self.search_fixed(constraint) {
+            result = best_move;
+
+            if let Some(depth) = constraint.depth.checked_add(1) {
+                constraint.depth = depth;
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+
+    pub fn search_dynamic(
+        &mut self,
+        mut constraint: SearchConstraint,
+    ) -> Result<(Evaluation, u16), SearchError> {
+        self.iteration_counter = 0;
+        let mut result = Err(SearchError);
+
+        loop {
+            match self.search_fixed(constraint) {
+                Ok(best_move) => result = Ok(best_move),
+                Err(search_error) => break Err(search_error).or(result),
+            }
+
+            if let Some(depth) = constraint.depth.checked_add(1) {
+                constraint.depth = depth;
+            } else {
+                break result;
+            }
+        }
+    }
+
+    fn search_fixed(
+        &mut self,
+        SearchConstraint {
+            mut board,
+            depth,
+            deadline,
+        }: SearchConstraint,
+    ) -> Result<(Evaluation, u16), SearchError> {
+        let search_duration = deadline.map(|d| d.duration_since(Instant::now()));
+        if search_duration.is_some_and(|d| d.is_zero()) {
+            return Err(SearchError);
+        }
+
+        log::debug!("Searching for {:?} (depth={depth})", search_duration);
+        let mut best_move = (Evaluation::WORST, 0);
 
         for move_idx in 0..4 {
             let Some(swiped) = board.checked_swipe_right().and_then(SpawnNode::new) else {
@@ -91,13 +165,15 @@ impl MeanMax {
             };
 
             log::trace!("Evaluating move#{move_idx}:\n{swiped:?}");
-            let move_eval = self.evaluate_move(swiped, depth, best_move.0);
+            let move_eval = self.evaluate_move(swiped, depth, best_move.0, deadline)?;
             best_move = (move_eval, move_idx).max(best_move);
 
             board = board.rotate_90();
         }
 
-        best_move
+        log::debug!("Result: {best_move:?}");
+
+        Ok(best_move)
     }
 
     pub fn clear_cache(&mut self) {
@@ -184,7 +260,8 @@ impl MeanMax {
         node: SpawnNode,
         mut depth: i32,
         mut lower_bound: Evaluation,
-    ) -> Evaluation {
+        deadline: Option<Instant>,
+    ) -> Result<Evaluation, SearchError> {
         #[derive(Debug)]
         enum Action {
             Evaluate(SpawnNode),
@@ -194,8 +271,9 @@ impl MeanMax {
         }
 
         let mut action = Action::Evaluate(node);
+        debug_assert!(self.stack.is_empty(), "stack should be empty before search");
 
-        loop {
+        while deadline.is_none_or(|i| i.elapsed().is_zero()) {
             self.iteration_counter += 1;
             log::trace!("Action: {action:?}");
             log::trace!("Depth: {depth:2}, LowerB: {lower_bound}");
@@ -247,7 +325,7 @@ impl MeanMax {
                 Action::Propagate(eval) => {
                     // Reached root
                     let Some(mut state) = self.stack.pop().map(EvaluationState::from) else {
-                        return eval;
+                        return Ok(eval);
                     };
 
                     if eval >= Evaluation::BEST {
@@ -304,6 +382,9 @@ impl MeanMax {
                 }
             };
         }
+
+        self.stack.clear();
+        Err(SearchError)
     }
 
     pub fn eval_cache(&self) -> &BoardCache<Evaluation> {
@@ -335,7 +416,9 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        let (eval, move_idx) = mean_max.search(SearchConstraint { board, depth: 2 });
+        let (eval, move_idx) = mean_max
+            .search_dynamic(SearchConstraint::new(board).depth(2))
+            .unwrap();
 
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
@@ -349,7 +432,9 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        let (eval, move_idx) = mean_max.search(SearchConstraint { board, depth: 2 });
+        let (eval, move_idx) = mean_max
+            .search_dynamic(SearchConstraint::new(board).depth(2))
+            .unwrap();
 
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);
@@ -363,7 +448,9 @@ mod test {
         let board = BoardAvx2::from_array(cells).unwrap();
 
         let mut mean_max = MeanMax::new();
-        let (eval, move_idx) = mean_max.search(SearchConstraint { board, depth: 3 });
+        let (eval, move_idx) = mean_max
+            .search_dynamic(SearchConstraint::new(board).depth(3))
+            .unwrap();
 
         log::info!("Evaluated:\n{board:?}\nMove idx: {move_idx}, eval: {eval}");
         log::info!("Iterations: {}", mean_max.iteration_counter);

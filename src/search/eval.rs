@@ -76,7 +76,8 @@ impl EvaluationState {
 
     pub fn evaluate(self) -> Evaluation {
         debug_assert_eq!(self.remaining_moves, 0, "we have not tried all the moves");
-        debug_assert!(self.denominator <= 3 * 15, "denominator not divisible by 3");
+        debug_assert!(0 < self.denominator, "denominator is 0!");
+        debug_assert!(self.denominator <= 3 * 15, "is bigger than 45!");
 
         Evaluation::new(self.numerator / self.denominator as u16)
     }
