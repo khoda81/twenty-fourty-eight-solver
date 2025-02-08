@@ -36,10 +36,6 @@ struct Args {
     /// Keep the evaluation cache instead of clearing every move
     persistent_cache: bool,
 
-    #[arg(long)]
-    /// Depth of search for the heuristic
-    heuristic_depth: Option<u32>,
-
     #[arg(short, long, default_value = "1000")]
     num_eval_games: u64,
 
@@ -73,13 +69,9 @@ fn main() {
 
     let mut mean_max = MeanMax::new();
 
-    if let Some(heuristic_depth) = args.heuristic_depth {
-        mean_max.heuristic_depth = heuristic_depth;
-    }
-
     match args.mode {
         Mode::SingleGame => play(&mut mean_max, board, args),
-        Mode::Eval => evaluate_heuristic(&mut mean_max, board, args),
+        Mode::Eval => evaluate(&mut mean_max, board, args),
         Mode::SingleShot => {
             let constraint = SearchConstraint {
                 board,
@@ -180,8 +172,9 @@ fn search_best_move(mean_max: &mut MeanMax, search_constraint: SearchConstraint)
     best_move
 }
 
-fn evaluate_heuristic(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
-    log::info!("Evaluating heuristic!");
+fn evaluate(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
+    log::info!("Evaluating on:\n{board}");
+
     let mut constraint = SearchConstraint {
         board,
         depth: 0,
