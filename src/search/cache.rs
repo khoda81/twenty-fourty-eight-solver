@@ -8,7 +8,7 @@ struct CacheEntry<T> {
 }
 
 pub struct BoardCache<T> {
-    cache: HashMap<u128, CacheEntry<T>>,
+    cache: fxhash::FxHashMap<u128, CacheEntry<T>>,
     hit_counter: u32,
     lookup_counter: u32,
 }
@@ -16,7 +16,7 @@ pub struct BoardCache<T> {
 impl<T> BoardCache<T> {
     pub fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: HashMap::with_hasher(fxhash::FxBuildHasher::new()),
             hit_counter: 0,
             lookup_counter: 0,
         }
@@ -25,7 +25,7 @@ impl<T> BoardCache<T> {
     pub fn get(&mut self, board: BoardAvx2, depth: i32) -> Option<&T> {
         self.lookup_counter += 1;
 
-        match self.cache.get(&board.into_u128()) {
+        match self.cache.get(&board.as_u128()) {
             Some(entry) if entry.depth >= depth => {
                 self.hit_counter += 1;
                 Some(&entry.data)
@@ -38,7 +38,7 @@ impl<T> BoardCache<T> {
         let cache_entry = CacheEntry { depth, data: eval };
         use std::collections::hash_map::Entry;
 
-        match self.cache.entry(board.into_u128()) {
+        match self.cache.entry(board.as_u128()) {
             Entry::Occupied(mut occupied_entry) if occupied_entry.get().depth <= depth => {
                 occupied_entry.insert(cache_entry);
             }

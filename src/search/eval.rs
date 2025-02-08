@@ -1,4 +1,7 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    ops::{Add, AddAssign, Sub, SubAssign},
+};
 
 use crate::board::BoardAvx2;
 
@@ -25,8 +28,49 @@ impl Evaluation {
         Self(eval)
     }
 
+    pub fn new_fraction(numerator: u16, denominator: u16) -> Self {
+        if numerator >= denominator {
+            Self::BEST
+        } else {
+            let eval = Self::BEST.as_u16() as u32 * numerator as u32 / denominator as u32;
+            Self::new(eval as u16)
+        }
+    }
+
     pub fn as_u16(self) -> u16 {
         self.0
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+impl Add<u16> for Evaluation {
+    type Output = Self;
+
+    fn add(self, rhs: u16) -> Self::Output {
+        Self(self.0.saturating_add(rhs)).min(Self::BEST)
+    }
+}
+
+impl AddAssign<u16> for Evaluation {
+    fn add_assign(&mut self, rhs: u16) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub<u16> for Evaluation {
+    type Output = Self;
+
+    fn sub(self, rhs: u16) -> Self::Output {
+        Self(self.0.saturating_sub(rhs)).max(Self::WORST)
+    }
+}
+
+impl SubAssign<u16> for Evaluation {
+    fn sub_assign(&mut self, rhs: u16) {
+        *self = *self - rhs;
     }
 }
 

@@ -4,13 +4,14 @@ use super::{cache::BoardCache, eval::Evaluation, eval::EvaluationState, node::Sp
 use crate::{board::BoardAvx2, search::node::Transition};
 use std::{
     arch::x86_64::__m128i,
+    i32,
     time::{Duration, Instant},
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct SearchConstraint {
     pub board: BoardAvx2,
-    pub depth: i32,
+    pub depth: Option<i32>,
     pub deadline: Option<Instant>,
 }
 
@@ -25,13 +26,16 @@ impl SearchConstraint {
     pub fn new(board: BoardAvx2) -> Self {
         Self {
             board,
-            depth: 0,
+            depth: None,
             deadline: None,
         }
     }
 
     pub fn depth(self, depth: i32) -> Self {
-        Self { depth, ..self }
+        Self {
+            depth: Some(depth),
+            ..self
+        }
     }
 
     pub fn deadline(self, deadline: Instant) -> Self {
@@ -48,37 +52,29 @@ impl SearchConstraint {
         }
     }
 
-    pub fn sat(&self) -> bool {
-        self.depth >= 0
-    }
-
-    pub fn tighten(&mut self, factor: u32) {
-        debug_assert!(factor > 0);
-
-        //while factor >= 64 {
-        //    self.depth -= Self::LOGS[factor as usize % 64];
-        //    factor /= 64;
-        //}
-        //
-        //self.depth -= Self::LOGS[factor as usize % 64];
-        self.depth -= 1;
-    }
-
-    pub fn loosen(&mut self, factor: u32) {
-        debug_assert!(factor > 0);
-
-        //while factor >= 64 {
-        //    self.depth += Self::LOGS[factor as usize % 64];
-        //    factor /= 64;
-        //}
-        //
-        //self.depth += Self::LOGS[factor as usize % 64];
-        self.depth += 1;
-    }
-
-    pub fn set_depth(&mut self, log_prob: i32) {
-        self.depth = log_prob;
-    }
+    //pub fn tighten(&mut self, factor: u32) {
+    //    debug_assert!(factor > 0);
+    //
+    //    //while factor >= 64 {
+    //    //    self.depth -= Self::LOGS[factor as usize % 64];
+    //    //    factor /= 64;
+    //    //}
+    //    //
+    //    //self.depth -= Self::LOGS[factor as usize % 64];
+    //    self.depth -= 1;
+    //}
+    //
+    //pub fn loosen(&mut self, factor: u32) {
+    //    debug_assert!(factor > 0);
+    //
+    //    //while factor >= 64 {
+    //    //    self.depth += Self::LOGS[factor as usize % 64];
+    //    //    factor /= 64;
+    //    //}
+    //    //
+    //    //self.depth += Self::LOGS[factor as usize % 64];
+    //    self.depth += 1;
+    //}
 }
 
 #[derive(Debug, Error)]
@@ -113,16 +109,12 @@ impl MeanMax {
             .expect("search should not fail without deadline");
 
         constraint.deadline = deadline;
-        constraint.depth += 1;
+        constraint.depth = constraint.depth.and_then(|d| d.checked_add(1));
 
         while let Ok(best_move) = self.search_fixed(constraint) {
             result = best_move;
 
-            if let Some(depth) = constraint.depth.checked_add(1) {
-                constraint.depth = depth;
-            } else {
-                break;
-            }
+            constraint.depth = constraint.depth.and_then(|d| d.checked_add(1));
         }
 
         result
@@ -141,11 +133,7 @@ impl MeanMax {
                 Err(search_error) => break Err(search_error).or(result),
             }
 
-            if let Some(depth) = constraint.depth.checked_add(1) {
-                constraint.depth = depth;
-            } else {
-                break result;
-            }
+            constraint.depth = constraint.depth.and_then(|d| d.checked_add(1));
         }
     }
 
@@ -158,14 +146,16 @@ impl MeanMax {
         }: SearchConstraint,
     ) -> Result<(Evaluation, u16), SearchError> {
         let search_duration = deadline.map(|d| d.duration_since(Instant::now()));
+        let depth = depth.unwrap_or(i32::MAX);
+
         if search_duration.is_some_and(|d| d.is_zero()) {
             return Err(SearchError);
         }
 
         if let Some(duration) = search_duration {
-            log::debug!("Searching for {:?} (depth={depth})", duration);
+            log::debug!("Searching for {:?} (depth={depth:?})", duration);
         } else {
-            log::debug!("Searching for ever (depth={depth})");
+            log::debug!("Searching for ever (depth={depth:?})");
         }
 
         let mut best_move = (Evaluation::WORST, 0);
@@ -178,8 +168,8 @@ impl MeanMax {
 
             log::trace!("Evaluating move#{move_idx}:\n{swiped:?}");
             let move_eval = self.evaluate_move(swiped, depth, best_move.0, deadline)?;
-            best_move = (move_eval, move_idx).max(best_move);
 
+            best_move = (move_eval, move_idx).max(best_move);
             board = board.rotate_90();
         }
 
@@ -254,15 +244,13 @@ impl MeanMax {
                 }
 
                 Action::Expand => {
-                    let rot0 = node.current_branch();
-                    let rot1 = rot0.rotate_90();
-                    let rot2 = rot1.rotate_90();
-                    let rot3 = rot2.rotate_90();
-
                     lower_bound = state.required_lower_bound();
-                    let mut nodes = [rot0, rot1, rot2, rot3]
+
+                    let mut nodes = node
+                        .current_branch()
+                        .rotations()
                         .into_iter()
-                        .filter_map(|b| b.checked_swipe_right())
+                        .filter_map(BoardAvx2::checked_swipe_right)
                         .filter_map(SpawnNode::new)
                         .inspect(|_| state.add_move());
 

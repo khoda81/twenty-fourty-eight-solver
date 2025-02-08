@@ -84,6 +84,28 @@ impl SpawnNode {
         }
     }
 
+    /// Return a board with a random spawn
+    // TODO: Optimize
+    pub fn random_spawned(rng: &mut impl rand::Rng, board: BoardAvx2) -> Option<BoardAvx2> {
+        let mut node = SpawnNode::new(board)?;
+
+        let num_empty = board.num_empty();
+        let steps = rng.random_range(0..num_empty * 3);
+        if steps >= num_empty * 2 {
+            // Spawn a two
+            while let Transition::None = node.next_spawn() {}
+        }
+
+        for i in 0..steps / 3 {
+            match node.next_spawn() {
+                Transition::None => debug_assert!(i < num_empty - 1),
+                Transition::Done | Transition::Switch => debug_assert!(i == num_empty - 1),
+            }
+        }
+
+        Some(node.current_branch())
+    }
+
     pub fn current_branch(&self) -> BoardAvx2 {
         unsafe {
             let mask = _mm_set1_epi8(0b10011111_u8 as i8);

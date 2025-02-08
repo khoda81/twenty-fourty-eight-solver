@@ -100,11 +100,22 @@ impl BoardAvx2 {
         Self(unsafe { simd_utils::rotate_90(self.0) })
     }
 
+    /// Generate all the rotations
+    #[inline]
+    pub fn rotations(self) -> [Self; 4] {
+        let rot0 = self;
+        let rot1 = rot0.rotate_90();
+        let rot2 = rot1.rotate_90();
+        let rot3 = rot2.rotate_90();
+
+        [rot0, rot1, rot2, rot3]
+    }
+
     pub fn into_inner(self) -> __m128i {
         self.0
     }
 
-    pub fn into_u128(self) -> u128 {
+    pub fn as_u128(self) -> u128 {
         unsafe { std::mem::transmute(self) }
     }
 

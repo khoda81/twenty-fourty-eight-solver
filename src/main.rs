@@ -5,11 +5,12 @@ use std::{
 
 use clap::{Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
-use log::info;
 use number_prefix::NumberPrefix;
 use twenty_fourty_eight_solver::{
-    board::{self, BoardAvx2},
+    board::{BoardAvx2, editor},
     search::{
+        eval::Evaluation,
+        mcts::{MonteCarloTreeSearch as MCTS, SearchConstraint as MctsConstraint},
         mean_max::{MeanMax, SearchConstraint},
         node::SpawnNode,
     },
@@ -20,11 +21,28 @@ fn parse_duration(arg: &str) -> Result<std::time::Duration, std::num::ParseFloat
     Ok(std::time::Duration::from_secs_f64(seconds))
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Algorithm {
+    MeanMax,
+    Mcts,
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    Eval,
+    #[default]
+    SingleGame,
+    SingleShot,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "2048 Solver", version, about = "A solver for the 2048 game", long_about = None)]
 struct Args {
     #[arg(value_enum, short, long, default_value = "single-game")]
     mode: Mode,
+
+    #[arg(value_enum, short, long, default_value = "mcts")]
+    algorithm: Algorithm,
 
     #[arg(short, long)]
     depth: Option<i32>,
@@ -39,16 +57,119 @@ struct Args {
     #[arg(short, long, default_value = "1000")]
     num_eval_games: u64,
 
-    #[arg(long, value_parser=parse_duration)]
+    #[arg(short='t', long, value_parser=parse_duration)]
     search_time: Option<Duration>,
 }
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum Mode {
-    Eval,
-    #[default]
-    SingleGame,
-    SingleShot,
+trait Search {
+    type Constraint;
+
+    fn search_best_move(&mut self, constraint: Self::Constraint) -> (Evaluation, u16);
+    fn constraint_from_args(board: BoardAvx2, args: &Args) -> Self::Constraint;
+    fn clear(&mut self);
+}
+
+impl Search for MeanMax {
+    type Constraint = SearchConstraint;
+
+    fn search_best_move(&mut self, constraint: Self::Constraint) -> (Evaluation, u16) {
+        let start = std::time::Instant::now();
+        let (eval, best_move) = self.search_flexible(constraint);
+        let elapsed = start.elapsed();
+
+        let iterations = self.iteration_counter as f64;
+
+        if self.iteration_counter > 0 {
+            let per_iteration = elapsed / self.iteration_counter;
+            log::debug!(
+                "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
+                Count(iterations)
+            );
+        } else {
+            log::debug!("{:.0} iterations in {elapsed:.2?}", Count(iterations));
+        }
+
+        let cache = self.eval_cache();
+        log::debug!(
+            "Eval cache hit rate: {:.3} ({:.0}/{:.0})",
+            cache.hit_rate(),
+            Count(cache.hit_counter() as f64),
+            Count(cache.lookup_counter() as f64),
+        );
+
+        let cache = self.prune_cache();
+        log::debug!(
+            "Prune cache hit rate: {:.3} ({:.0}/{:.0})",
+            cache.hit_rate(),
+            Count(cache.hit_counter() as f64),
+            Count(cache.lookup_counter() as f64),
+        );
+
+        (eval, best_move)
+    }
+
+    fn constraint_from_args(board: BoardAvx2, args: &Args) -> Self::Constraint {
+        SearchConstraint {
+            board,
+            depth: args.depth,
+            deadline: args.search_time.map(|d| Instant::now() + d),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.clear_cache();
+    }
+}
+
+impl Search for MCTS {
+    type Constraint = MctsConstraint;
+
+    fn search_best_move(&mut self, constraint: Self::Constraint) -> (Evaluation, u16) {
+        let start = std::time::Instant::now();
+        let search_duration = constraint.deadline.duration_since(start);
+        log::debug!("Searching for {search_duration:?}");
+
+        let ((eval, best_move), iterations) = self.search(constraint);
+        let elapsed = start.elapsed();
+
+        if iterations > 0 {
+            let per_iteration = elapsed / iterations as u32;
+            log::debug!(
+                "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
+                Count(iterations as f64)
+            );
+        } else {
+            log::debug!(
+                "{:.0} iterations in {elapsed:.2?}",
+                Count(iterations as f64)
+            );
+        }
+
+        let lookups = self.cache_lookup_counter as f64;
+        let hits = self.cache_hit_counter as f64;
+
+        log::debug!(
+            "Node cache hit rate: {:.3} ({:.0}/{:.0})",
+            hits / lookups,
+            Count(hits),
+            Count(lookups),
+        );
+
+        (eval, best_move)
+    }
+
+    fn constraint_from_args(board: BoardAvx2, args: &Args) -> Self::Constraint {
+        let deadline = args
+            .search_time
+            .map(|d| Instant::now() + d)
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(1));
+
+        MctsConstraint { board, deadline }
+    }
+
+    fn clear(&mut self) {
+        self.clear_cache();
+    }
 }
 
 fn main() {
@@ -62,63 +183,63 @@ fn main() {
     let board = if args.board_editor {
         interactive_board_editor()
     } else {
-        SpawnNode::new(BoardAvx2::new().unwrap())
-            .unwrap()
-            .random_spawn(&mut rand::rng())
+        SpawnNode::random_spawned(&mut rand::rng(), BoardAvx2::new().unwrap()).unwrap()
     };
 
-    let mut mean_max = MeanMax::new();
+    match args.algorithm {
+        Algorithm::MeanMax => {
+            log::debug!("Using MeanMax for search");
+            dispatch_mode(&mut MeanMax::new(), board, args)
+        }
+        Algorithm::Mcts => {
+            log::debug!("Using MonteCarloTreeSearch for search");
+            if args.depth.is_some() {
+                log::warn!("Depth is ignored as its not supported with monte-carlo");
+            }
 
+            dispatch_mode(&mut MCTS::new(), board, args)
+        }
+    }
+}
+
+fn dispatch_mode<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
     match args.mode {
-        Mode::SingleGame => play(&mut mean_max, board, args),
-        Mode::Eval => evaluate(&mut mean_max, board, args),
+        Mode::SingleGame => play(searcher, board, args),
+        Mode::Eval => evaluate(searcher, board, args),
         Mode::SingleShot => {
-            let constraint = SearchConstraint {
-                board,
-                depth: args.depth.unwrap_or(7),
-                deadline: args.search_time.map(|d| Instant::now() + d),
-            };
+            let constraint = S::constraint_from_args(board, &args);
+            let (_eval, best_move) = searcher.search_best_move(constraint);
+            log::info!("Selected: {best_move}");
 
-            let best_move = search_best_move(&mut mean_max, constraint);
-            info!("Selected: {best_move}");
             let board = board.swipe_direction(best_move);
-            info!("Board:\n{board}");
+            log::info!("Board:\n{board}");
 
             if board.num_empty() == 0 {
-                info!("Game over!\n{board}");
+                log::info!("Game over!\n{board}");
             }
         }
     }
 }
 
-fn play(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
-    let mut constraint = SearchConstraint {
-        board,
-        depth: 3,
-        deadline: None,
-    };
-
-    if let Some(depth) = args.depth {
-        constraint.set_depth(depth);
-    }
-
+fn play<S: Search>(searcher: &mut S, mut board: BoardAvx2, args: Args) {
     loop {
+        log::info!("Board:\n{board}");
         if !args.persistent_cache {
-            mean_max.clear_cache();
+            log::debug!("Clearing cache!");
+            searcher.clear();
         }
 
-        if let Some(interval) = args.search_time {
-            constraint.deadline = Some(Instant::now() + interval);
-        }
+        let constraint = S::constraint_from_args(board, &args);
+        let (eval, best_move) = searcher.search_best_move(constraint);
 
-        let best_move = search_best_move(mean_max, constraint);
+        log::info!("Best move: {best_move}, Eval: {eval}");
 
-        let spawn_iter = SpawnNode::new(constraint.board.swipe_direction(best_move));
+        let spawn_iter = SpawnNode::new(board.swipe_direction(best_move));
         let Some(spawn_iter) = spawn_iter else { break };
-        constraint.board = spawn_iter.random_spawn(&mut rand::rng());
+        board = spawn_iter.random_spawn(&mut rand::rng());
     }
 
-    info!("Game over!\n{}", constraint.board);
+    log::info!("Game over!\n{board}");
 }
 
 struct Count(f64);
@@ -134,56 +255,8 @@ impl Display for Count {
     }
 }
 
-fn search_best_move(mean_max: &mut MeanMax, search_constraint: SearchConstraint) -> u16 {
-    info!("Evaluating:\n{}", search_constraint.board);
-
-    let start = std::time::Instant::now();
-    let (eval, best_move) = mean_max.search_flexible(search_constraint);
-    let elapsed = start.elapsed();
-    info!("Best move: {best_move}, Eval: {eval}");
-
-    let iterations = mean_max.iteration_counter as f64;
-
-    if mean_max.iteration_counter > 0 {
-        let per_iteration = elapsed / mean_max.iteration_counter;
-        info!(
-            "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
-            Count(iterations)
-        );
-    } else {
-        info!("{:.0} iterations in {elapsed:.2?}", Count(iterations));
-    }
-
-    let cache = mean_max.eval_cache();
-    info!(
-        "Eval cache hit rate: {:.3} ({:.0}/{:.0})",
-        cache.hit_rate(),
-        Count(cache.hit_counter() as f64),
-        Count(cache.lookup_counter() as f64),
-    );
-    let cache = mean_max.prune_cache();
-    info!(
-        "Prune cache hit rate: {:.3} ({:.0}/{:.0})",
-        cache.hit_rate(),
-        Count(cache.hit_counter() as f64),
-        Count(cache.lookup_counter() as f64),
-    );
-
-    best_move
-}
-
-fn evaluate(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
+fn evaluate<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
     log::info!("Evaluating on:\n{board}");
-
-    let mut constraint = SearchConstraint {
-        board,
-        depth: 0,
-        deadline: None,
-    };
-
-    if let Some(depth) = args.depth {
-        constraint.set_depth(depth);
-    }
 
     let style =
         ProgressStyle::with_template("{pos}/{len} Games [{wide_bar:^.cyan/8}] Eta: {eta} {msg}")
@@ -194,8 +267,7 @@ fn evaluate(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
     let mut total = 0;
 
     for i in 1..args.num_eval_games + 1 {
-        let score = run_game(mean_max, constraint, &args);
-        total += score;
+        total += run_game(searcher, board, &args);
 
         let message = format!("Avg: {:6.2}", total as f64 / i as f64);
 
@@ -208,21 +280,19 @@ fn evaluate(mean_max: &mut MeanMax, board: BoardAvx2, args: Args) {
     log::info!("Avg: {eval}");
 }
 
-fn run_game(mean_max: &mut MeanMax, mut constraint: SearchConstraint, args: &Args) -> u32 {
+fn run_game<S: Search>(searcher: &mut S, mut board: BoardAvx2, args: &Args) -> u32 {
     let mut score = 0;
+    searcher.clear();
 
     loop {
-        mean_max.clear_cache();
+        searcher.clear();
 
-        if let Some(interval) = args.search_time {
-            constraint.deadline = Some(Instant::now() + interval);
-        }
+        let constraint = S::constraint_from_args(board, args);
+        let (_, best_move) = searcher.search_best_move(constraint);
 
-        let (_, best_move) = mean_max.search_flexible(constraint);
-
-        let spawn_iter = SpawnNode::new(constraint.board.swipe_direction(best_move));
+        let spawn_iter = SpawnNode::new(board.swipe_direction(best_move));
         let Some(spawn_iter) = spawn_iter else { break };
-        constraint.board = spawn_iter.random_spawn(&mut rand::rng());
+        board = spawn_iter.random_spawn(&mut rand::rng());
         score += 1;
     }
 
@@ -230,9 +300,9 @@ fn run_game(mean_max: &mut MeanMax, mut constraint: SearchConstraint, args: &Arg
 }
 
 fn interactive_board_editor() -> BoardAvx2 {
-    let board_values = board::editor::grid_editor().unwrap();
-
+    let board_values = editor::grid_editor().unwrap();
     let board = BoardAvx2::from_array(board_values).unwrap();
+
     if board == BoardAvx2::new().unwrap() {
         SpawnNode::new(board)
             .unwrap()
