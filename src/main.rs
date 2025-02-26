@@ -157,7 +157,7 @@ impl Search for MCTS {
 
             if log::log_enabled!(log::Level::Debug) {
                 let moves = self.children(constraint.board).unwrap();
-                log::debug!("Moves: {moves:#?}");
+                log::debug!("Moves: {moves:?}");
             }
 
             if Instant::now() > deadline {
