@@ -59,6 +59,9 @@ struct Args {
 
     #[arg(short='t', long, value_parser=parse_duration)]
     search_time: Option<Duration>,
+
+    #[arg(short = 'C')]
+    exploration_constant: Option<f64>,
 }
 
 trait Search {
@@ -73,7 +76,7 @@ impl Search for MeanMax {
     type Constraint = SearchConstraint;
 
     fn search_best_move(&mut self, constraint: Self::Constraint) -> (Evaluation, u16) {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let (eval, best_move) = self.search_flexible(constraint);
         let elapsed = start.elapsed();
 
@@ -82,7 +85,7 @@ impl Search for MeanMax {
         if self.iteration_counter > 0 {
             let per_iteration = elapsed / self.iteration_counter;
             log::debug!(
-                "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
+                "{:.0} iterations in {elapsed:.2?} ({per_iteration:.2?} per iteration)",
                 Count(iterations)
             );
         } else {
@@ -124,38 +127,43 @@ impl Search for MeanMax {
 impl Search for MCTS {
     type Constraint = MctsConstraint;
 
-    fn search_best_move(&mut self, constraint: Self::Constraint) -> (Evaluation, u16) {
-        let start = std::time::Instant::now();
+    fn search_best_move(&mut self, mut constraint: Self::Constraint) -> (Evaluation, u16) {
+        let start = Instant::now();
         let search_duration = constraint.deadline.duration_since(start);
-        log::debug!("Searching for {search_duration:?}");
+        log::debug!("Searching for {search_duration:.2?}");
+        let deadline = constraint.deadline;
+        let mut iterations = 0;
 
-        let ((eval, best_move), iterations) = self.search(constraint);
-        let elapsed = start.elapsed();
+        loop {
+            let next_print = Instant::now() + Duration::from_secs_f32(0.1);
+            constraint.deadline = deadline.min(next_print);
 
-        if iterations > 0 {
-            let per_iteration = elapsed / iterations as u32;
+            let ((eval, best_move), iters) = self.search(constraint);
+            let elapsed = start.elapsed();
+
+            iterations += iters;
+            let lookups = self.cache_lookup_counter as f64;
+            let hits = self.cache_hit_counter as f64;
+            let per_second = iterations as f64 / elapsed.as_secs_f64();
+
             log::debug!(
-                "{:.0} iterations in {elapsed:.2?} ({per_iteration:?} per iteration)",
-                Count(iterations as f64)
+                "Best move: {best_move}, Eval: {eval}, {:.0} iters in {elapsed:.2?} ({:.0}/s), Hit rate: {:.3} ({:.0}/{:.0})",
+                Count(iterations as f64),
+                Count(per_second),
+                hits / lookups,
+                Count(hits),
+                Count(lookups),
             );
-        } else {
-            log::debug!(
-                "{:.0} iterations in {elapsed:.2?}",
-                Count(iterations as f64)
-            );
+
+            if log::log_enabled!(log::Level::Debug) {
+                let moves = self.children(constraint.board).unwrap();
+                log::debug!("Moves: {moves:#?}");
+            }
+
+            if Instant::now() > deadline {
+                break (eval, best_move);
+            }
         }
-
-        let lookups = self.cache_lookup_counter as f64;
-        let hits = self.cache_hit_counter as f64;
-
-        log::debug!(
-            "Node cache hit rate: {:.3} ({:.0}/{:.0})",
-            hits / lookups,
-            Count(hits),
-            Count(lookups),
-        );
-
-        (eval, best_move)
     }
 
     fn constraint_from_args(board: BoardAvx2, args: &Args) -> Self::Constraint {
@@ -180,33 +188,40 @@ fn main() {
         .parse_default_env()
         .init();
 
-    let board = if args.board_editor {
-        interactive_board_editor()
-    } else {
-        SpawnNode::random_spawned(&mut rand::rng(), BoardAvx2::new().unwrap()).unwrap()
-    };
+    let board = args.board_editor.then(interactive_board_editor);
 
     match args.algorithm {
         Algorithm::MeanMax => {
             log::debug!("Using MeanMax for search");
             dispatch_mode(&mut MeanMax::new(), board, args)
         }
+
         Algorithm::Mcts => {
             log::debug!("Using MonteCarloTreeSearch for search");
             if args.depth.is_some() {
                 log::warn!("Depth is ignored as its not supported with monte-carlo");
             }
 
-            dispatch_mode(&mut MCTS::new(), board, args)
+            let mut mcts = MCTS::new();
+            if let Some(exploration_constant) = args.exploration_constant {
+                mcts.exploration_rate = exploration_constant;
+            }
+
+            dispatch_mode(&mut mcts, board, args)
         }
     }
 }
 
-fn dispatch_mode<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
+fn random_board() -> BoardAvx2 {
+    SpawnNode::random_spawned(&mut rand::rng(), BoardAvx2::new().unwrap()).unwrap()
+}
+
+fn dispatch_mode<S: Search>(searcher: &mut S, board: Option<BoardAvx2>, args: Args) {
     match args.mode {
-        Mode::SingleGame => play(searcher, board, args),
+        Mode::SingleGame => play(searcher, board.unwrap_or_else(random_board), args),
         Mode::Eval => evaluate(searcher, board, args),
         Mode::SingleShot => {
+            let board = board.unwrap_or_else(random_board);
             let constraint = S::constraint_from_args(board, &args);
             let (_eval, best_move) = searcher.search_best_move(constraint);
             log::info!("Selected: {best_move}");
@@ -255,8 +270,10 @@ impl Display for Count {
     }
 }
 
-fn evaluate<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
-    log::info!("Evaluating on:\n{board}");
+fn evaluate<S: Search>(searcher: &mut S, board: Option<BoardAvx2>, args: Args) {
+    if let Some(board) = board {
+        log::info!("Evaluating on:\n{board}");
+    }
 
     let style =
         ProgressStyle::with_template("{pos}/{len} Games [{wide_bar:^.cyan/8}] Eta: {eta} {msg}")
@@ -267,7 +284,7 @@ fn evaluate<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
     let mut total = 0;
 
     for i in 1..args.num_eval_games + 1 {
-        total += run_game(searcher, board, &args);
+        total += run_game(searcher, board.unwrap_or_else(random_board), &args);
 
         let message = format!("Avg: {:6.2}", total as f64 / i as f64);
 
@@ -278,6 +295,9 @@ fn evaluate<S: Search>(searcher: &mut S, board: BoardAvx2, args: Args) {
     pb.finish();
     let eval = total as f64 / args.num_eval_games as f64;
     log::info!("Avg: {eval}");
+
+    // Print ONLY the final score to stdout
+    println!("{eval}");
 }
 
 fn run_game<S: Search>(searcher: &mut S, mut board: BoardAvx2, args: &Args) -> u32 {

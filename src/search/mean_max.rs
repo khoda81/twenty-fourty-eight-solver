@@ -4,7 +4,6 @@ use super::{cache::BoardCache, eval::Evaluation, eval::EvaluationState, node::Sp
 use crate::{board::BoardAvx2, search::node::Transition};
 use std::{
     arch::x86_64::__m128i,
-    i32,
     time::{Duration, Instant},
 };
 

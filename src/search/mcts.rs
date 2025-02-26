@@ -2,9 +2,11 @@ use super::{eval::Evaluation, heuristic::random_rollout, node::SpawnNode};
 use crate::board::BoardAvx2;
 use std::{
     collections::{HashMap, hash_map::Entry},
+    fmt::Debug,
     time::Instant,
 };
 
+#[derive(Debug, Clone, Copy)]
 pub struct SearchConstraint {
     pub board: BoardAvx2,
     pub deadline: Instant,
@@ -30,6 +32,12 @@ impl Node {
     }
 }
 
+impl Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.evaluate(), self.visits)
+    }
+}
+
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Index(u32);
 
@@ -49,6 +57,7 @@ pub struct MonteCarloTreeSearch {
     nodes: Vec<Node>,
     node_stack: Vec<Index>,
 
+    pub exploration_rate: f64,
     pub cache_lookup_counter: u32,
     pub cache_hit_counter: u32,
 }
@@ -59,21 +68,20 @@ impl MonteCarloTreeSearch {
             transposition_table: HashMap::with_hasher(fxhash::FxBuildHasher::default()),
             nodes: Vec::new(),
             node_stack: Vec::new(),
+            exploration_rate: 110.0,
             cache_lookup_counter: 0,
             cache_hit_counter: 0,
         }
     }
 
-    fn select(nodes: &[Node]) -> usize {
+    fn select(nodes: &[Node], exploration_rate: f64) -> usize {
         if nodes.len() <= 1 {
             return 0;
         }
 
-        const EXPLORATION_RATE: f64 = 2.4;
-
         let mut parent_visits = 0;
         let mut max_eval = Evaluation::TERMINAL;
-        for (i, node) in nodes.iter().enumerate() {
+        for (i, node) in nodes.iter().enumerate().rev() {
             if node.visits == 0 {
                 return i;
             }
@@ -82,14 +90,13 @@ impl MonteCarloTreeSearch {
             max_eval = node.evaluate().max(max_eval);
         }
 
-        let exploration_factor = EXPLORATION_RATE * (parent_visits as f64).ln();
-        let max_eval = max_eval.as_u16() as f64 + 1.0;
+        let exploration_factor = exploration_rate * (parent_visits as f64).ln();
 
         let mut best_score = f64::NEG_INFINITY;
         let mut best_idx = 0;
 
         for (i, node) in nodes.iter().enumerate() {
-            let exploit = node.evaluate().as_u16() as f64 / max_eval;
+            let exploit = node.evaluate().as_u16() as f64;
             let explore = (exploration_factor / node.visits as f64).sqrt();
             let score = exploit + explore;
 
@@ -141,7 +148,7 @@ impl MonteCarloTreeSearch {
 
             let index = index.idx();
             let children = &self.nodes[index..index + num_moves];
-            let move_idx = Self::select(children);
+            let move_idx = Self::select(children, self.exploration_rate);
             self.node_stack.push(Index::new(index + move_idx));
 
             if depth == 0 {
@@ -161,6 +168,26 @@ impl MonteCarloTreeSearch {
             self.nodes[index.idx()].add(advantage);
             advantage -= 1;
         }
+    }
+
+    pub fn children(&self, board: BoardAvx2) -> Option<&[Node]> {
+        let mut moves = [board; 4];
+        let mut num_moves = 0;
+        for swiped in board
+            .rotations()
+            .into_iter()
+            .filter_map(|b| b.checked_swipe_right())
+        {
+            moves[num_moves] = swiped;
+            num_moves += 1;
+        }
+
+        if num_moves == 0 {
+            return Some(&[]);
+        }
+
+        let index = self.transposition_table.get(&board.as_u128())?.idx();
+        Some(&self.nodes[index..index + num_moves])
     }
 
     pub fn clear_cache(&mut self) {
@@ -198,7 +225,12 @@ impl MonteCarloTreeSearch {
                 continue;
             }
 
-            let eval = self.nodes[current_node].evaluate();
+            let eval = if self.nodes[current_node].visits == 0 {
+                Evaluation::new(1)
+            } else {
+                self.nodes[current_node].evaluate()
+            };
+
             best = (eval, move_index as u16).max(best);
             current_node += 1;
         }
