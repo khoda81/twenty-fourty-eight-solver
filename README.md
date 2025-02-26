@@ -38,7 +38,7 @@ cargo run --release -- --mode single-game --algorithm meanmax --depth 3 --search
 
 ### Interactive Board Editor
 
-To run the solver from a give starting position you can use the terminal editor.
+To run the solver from a given starting position you can use the terminal editor.
 
 1. **Run the Program**: Start the program by running the main executable with the `--board-editor` flag.
 
@@ -47,12 +47,12 @@ To run the solver from a give starting position you can use the terminal editor.
     ```
 
 2. **Edit the Board**:
-    - Use the arrow keys (`Up`, `Down`, `Left`, `Right`) to move the cursor around the grid.
-    - Use the `+` or `=` keys to increment the value of the current cell.
-    - Use the `-` key to decrement the value of the current cell.
-    - Use the number keys (`0`-`9`) or letter keys (`a`-`i`) to directly set the value of the current cell.
-    - Use the `.` key to clear the current cell.
-    - Press `Enter` or `q` to finish editing and exit the board editor.
+    - Use the arrow keys (<kbd>Up</kbd>, <kbd>Down</kbd>, <kbd>Left</kbd>, <kbd>Right</kbd>) to move the cursor around the grid.
+    - Use the <kbd>+</kbd> or <kbd>=</kbd> keys to increment the value of the current cell.
+    - Use the <kbd>-</kbd> key to decrement the value of the current cell.
+    - Use the number keys (<kbd>0</kbd>-<kbd>9</kbd>) or letter keys (<kbd>a</kbd>-<kbd>i</kbd>) to directly set the value of the current cell.
+    - Use the <kbd>.</kbd> key to clear the current cell.
+    - Press <kbd>Enter</kbd> or <kbd>q</kbd> to finish editing and exit the board editor.
 
 3. **Save and Use the Board**: Once you exit the board editor, the board configuration you created will be used for the game or evaluation, depending on the mode you selected.
 
